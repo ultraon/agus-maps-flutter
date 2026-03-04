@@ -234,7 +234,7 @@ If `dart run tool/build.dart` fails:
 Required environment variables for contributor mode:
 
 - `AGUS_MAPS_BUILD_MODE=contributor` - Force contributor mode
-- `COMAPS_TAG=v2026.02.23-9` - CoMaps version tag (optional, defaults in config)
+- `COMAPS_TAG=v2026.01.08-11` - CoMaps version tag (optional, defaults in config)
 
 Platform-specific variables (auto-detected in most cases):
 

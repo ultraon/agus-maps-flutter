@@ -31,7 +31,7 @@
 * **Windows asset/toolchain reliability**: Added and iterated MinGW/MSYS2/zlib/Python handling and fallback logic to make symbol generation and asset preparation more robust on Windows CI.
 * **Android build on Linux job**: Added Linux-based Android build path for speed comparison and workflow optimization; removed redundant macOS Android job.
 * **Qt module alignment in CI**: Added `qtpositioning` module setup for Linux/Windows/macOS build jobs to match native build requirements.
-* **Toolchain baseline refresh**: Updated CI/build defaults to `COMAPS_TAG=v2026.02.23-9`, `FLUTTER_VERSION=3.41.0`, and `CMAKE_VERSION=4.2.3` (including `tool/src/config.dart`, `.github/workflows/devops.yml`, and helper scripts).
+* **Toolchain baseline refresh**: Updated CI/build defaults to `COMAPS_TAG=v2026.01.08-11`, `FLUTTER_VERSION=3.41.0`, and `CMAKE_VERSION=4.2.3` (including `tool/src/config.dart`, `.github/workflows/devops.yml`, and helper scripts).
 
 ### Android Plugin & Security Configuration
 

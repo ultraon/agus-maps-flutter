@@ -365,7 +365,7 @@ If the XCFramework is not found, `pod install` will fail with an error.
 
 | Plugin Version | CoMaps Tag | XCFramework Asset |
 |----------------|------------|-------------------|
-| 0.0.1 | v2026.02.23-9 | CoMaps.xcframework.zip |
+| 0.0.1 | v2026.01.08-11 | CoMaps.xcframework.zip |
 
 
 ## Plugin Distribution for External Consumers
