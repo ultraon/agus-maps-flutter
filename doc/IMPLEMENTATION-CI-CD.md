@@ -269,8 +269,8 @@ build-release:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `COMAPS_TAG` | `v2026.01.08-11` | CoMaps version tag |
-| `FLUTTER_VERSION` | `3.38.9` | Flutter SDK version |
+| `COMAPS_TAG` | `v2026.02.23-9` | CoMaps version tag |
+| `FLUTTER_VERSION` | `3.41.0` | Flutter SDK version |
 | `NDK_VERSION` | `27.3.13750724` | Android NDK version |
 | `CMAKE_VERSION` | `4.2.1` | CMake version |
 | `IOS_DEPLOYMENT_TARGET` | `15.6` | iOS minimum version |

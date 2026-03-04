@@ -352,9 +352,9 @@ Build configuration constants and utilities.
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `defaultComapsTag` | `v2026.01.08-11` | Default CoMaps git tag |
-| `flutterVersion` | `3.38.9` | Target Flutter version |
-| `cmakeVersion` | `4.2.1` | CMake version |
+| `defaultComapsTag` | `v2026.02.23-9` | Default CoMaps git tag |
+| `flutterVersion` | `3.41.0` | Target Flutter version |
+| `cmakeVersion` | `4.2.3` | CMake version |
 | `ndkVersion` | `29.0.14206865` | Android NDK version |
 | `buildType` | `Release` | CMake build type |
 | `androidMinSdk` | `24` | Android minimum SDK |
@@ -530,7 +530,7 @@ General utility functions.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AGUS_MAPS_BUILD_MODE` | Build mode: `consumer` or `contributor` | Auto-detect |
-| `COMAPS_TAG` | CoMaps git tag to use | `v2026.01.08-11` |
+| `COMAPS_TAG` | CoMaps git tag to use | `v2026.02.23-9` |
 | `ANDROID_HOME` | Android SDK path | Auto-detect |
 | `ANDROID_SDK_ROOT` | Android SDK path (alternative) | Auto-detect |
 | `ANDROID_NDK_HOME` | Android NDK path | Auto-detect |

@@ -31,6 +31,7 @@
 * **Windows asset/toolchain reliability**: Added and iterated MinGW/MSYS2/zlib/Python handling and fallback logic to make symbol generation and asset preparation more robust on Windows CI.
 * **Android build on Linux job**: Added Linux-based Android build path for speed comparison and workflow optimization; removed redundant macOS Android job.
 * **Qt module alignment in CI**: Added `qtpositioning` module setup for Linux/Windows/macOS build jobs to match native build requirements.
+* **Toolchain baseline refresh**: Updated CI/build defaults to `COMAPS_TAG=v2026.02.23-9`, `FLUTTER_VERSION=3.41.0`, and `CMAKE_VERSION=4.2.3` (including `tool/src/config.dart`, `.github/workflows/devops.yml`, and helper scripts).
 
 ### Android Plugin & Security Configuration
 
@@ -48,6 +49,7 @@
 * **Architecture and implementation docs expanded**: Updated `GUIDE.md`, API docs, per-platform implementation docs, and CI/build notes to reflect typed messaging, localization ownership, and asset integrity workflow.
 * **New implementation references**: Added `doc/IMPLEMENTATION-LOCALISATION.md`, `doc/IMPLEMENTATION-NATIVE-MESSAGE-PASSING.md`, and `doc/IMPL-05-place-page-drawer.md`.
 * **Issue knowledge base growth**: Added/moved detailed issue analyses under `doc/issues/` (FFI, event lifecycle, place page data handling, symbol loading, Linux pixel buffer, and related performance topics).
+* **Version reference sync**: Updated CoMaps tag and Flutter/CMake default version references across implementation docs and tooling docs (`doc/COMAPS-ASSETS.md`, `doc/DART-HOOKS.md`, `doc/IMPLEMENTATION-ANDROID.md`, `doc/IMPLEMENTATION-CI-CD.md`, `doc/IMPLEMENTATION-IOS.md`, `doc/IMPLEMENTATION-MACOS.md`, `tool/README.md`).
 
 ### Release Metadata
 
