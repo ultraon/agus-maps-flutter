@@ -315,6 +315,69 @@ Force a complete redraw by updating map style (more aggressive than `invalidateM
 - **Implementation**: Fully implemented via FFI
 - **Use Case**: Call after registering maps when DrapeEngine was already initialized
 
+#### `getViewportCenter() -> (double lat, double lon)`
+Get current viewport center coordinates.
+- **Returns**: Record of (latitude, longitude) in WGS84. Returns (0.0, 0.0) if framework not ready.
+- **Implementation**: Fully implemented via FFI (`Framework::GetViewportCenter()` + `mercator::ToLatLon()`)
+- **Use Case**: Save/restore viewport state, overlay positioning, coordinate projection
+
+#### `getCurrentZoom() -> int`
+Get current zoom level (draw scale).
+- **Returns**: Current zoom level (0-20). Returns 0 if framework not ready.
+- **Implementation**: Fully implemented via FFI (`Framework::GetDrawScale()`)
+- **Use Case**: Display zoom level, zoom controls, zoom-aware overlay scaling
+
+### Location Services
+
+#### `onLocationUpdate(double lat, double lon, double accuracy, double bearing, double speed, int timestampMs)`
+Feed a GPS location update to the native engine for the "my position" marker.
+- **Parameters**:
+  - `lat`, `lon`: WGS84 coordinates
+  - `accuracy`: Horizontal accuracy in meters
+  - `bearing`: Bearing in degrees from true North (-1 if unavailable)
+  - `speed`: Speed in meters per second (-1 if unavailable)
+  - `timestampMs`: Unix epoch milliseconds
+- **Implementation**: Fully implemented via FFI (`Framework::OnLocationUpdate()`)
+
+#### `onCompassUpdate(double magneticNorth, {double trueNorth = -1})`
+Feed a compass heading update to the native engine.
+- **Parameters**:
+  - `magneticNorth`: Heading in degrees (0-360)
+  - `trueNorth`: Heading in degrees (0-360), -1 if unavailable
+- **Implementation**: Fully implemented via FFI (`Framework::OnCompassUpdate()`, converts degrees to radians)
+
+#### `enableMyLocation(bool enable)`
+Enable or disable the native "my position" marker and GPS tracking.
+- **Parameters**: `enable`: true to show marker, false to hide
+- **Implementation**: Fully implemented via FFI (`Framework::ConnectToGpsTracker()` / `DisconnectFromGpsTracker()`)
+
+#### `setMyLocationMode(MyLocationMode mode)`
+Set the my-position display mode.
+- **Parameters**: `mode`: One of `MyLocationMode.pendingPosition`, `.notFollowNoPosition`, `.notFollow`, `.follow`, `.followAndRotate`
+- **Implementation**: Fully implemented via FFI (currently cycles modes via `SwitchMyPositionNextMode()`)
+- **Note**: Direct mode setting is not exposed by Framework; this cycles through modes
+
+### Custom Markers
+
+#### `addCustomMarker(double lat, double lon, {String? iconId, String? label}) -> int`
+Add a custom marker at the given WGS84 coordinates.
+- **Parameters**:
+  - `lat`, `lon`: WGS84 coordinates
+  - `iconId`: Optional icon identifier (null for default pin)
+  - `label`: Optional label text (null for no label)
+- **Returns**: Positive marker ID on success, negative on error
+- **Implementation**: Fully implemented via FFI (`BookmarkManager::CreateUserMark<StaticMarkPoint>()`)
+- **Use Case**: POI highlights, search result pins
+
+#### `removeCustomMarker(int markerId)`
+Remove a custom marker by its ID.
+- **Parameters**: `markerId`: ID returned by `addCustomMarker()`
+- **Implementation**: Fully implemented via FFI (`BookmarkManager::DeleteUserMark()`)
+
+#### `clearCustomMarkers()`
+Remove all custom markers.
+- **Implementation**: Fully implemented via FFI
+
 ### Touch and Gesture Input
 
 #### `sendTouchEvent(TouchType type, int id1, double x1, double y1, {int id2 = -1, double x2 = 0, double y2 = 0})`
@@ -433,17 +496,11 @@ The following APIs are candidates for future exposure to Flutter. Each is marked
 
 ### Viewport and Camera Control
 
-#### `getViewportCenter() -> (double lat, double lon)`
-Get current viewport center coordinates.
-- **Difficulty**: Easy (existing `GetViewportCenter()` in Framework)
-- **Returns**: Current center point in WGS84
-- **Use Case**: Save/restore viewport state, sync with external components
+#### `getViewportCenter() -> (double lat, double lon)` -- IMPLEMENTED (v0.1.25)
+See [Existing APIs > Viewport Control](#viewport-control).
 
-#### `getCurrentZoom() -> int`
-Get current zoom level.
-- **Difficulty**: Easy (can derive from `GetDrawScale()` or `GetCurrentViewport()`)
-- **Returns**: Current zoom level (0-20)
-- **Use Case**: Display zoom level in UI, implement zoom controls
+#### `getCurrentZoom() -> int` -- IMPLEMENTED (v0.1.25)
+See [Existing APIs > Viewport Control](#viewport-control).
 
 #### `animateToLocation(double lat, double lon, int zoom, {Duration duration})`
 Animate camera to location with specified duration.
@@ -767,12 +824,8 @@ Get extended metadata for a feature (opening hours, phone, website, etc.).
 - **Returns**: Map of metadata keys and values
 - **Use Case**: POI detail pages, business information display
 
-#### `addCustomMarker(double lat, double lon, {String? icon, String? label}) -> String markerId`
-Add custom marker/pin to map.
-- **Difficulty**: Medium (Framework has DrapeApi for custom overlays, needs marker rendering)
-- **Parameters**: Location, optional icon and label
-- **Returns**: Marker ID for later manipulation
-- **Use Case**: Custom annotations, user-defined markers
+#### `addCustomMarker(double lat, double lon, {String? iconId, String? label}) -> int markerId` -- IMPLEMENTED (v0.1.25)
+See [Existing APIs > Custom Markers](#custom-markers).
 
 #### `updateCustomMarker(String markerId, {double? lat, double? lon, String? icon, String? label})`
 Update custom marker properties.
@@ -780,11 +833,11 @@ Update custom marker properties.
 - **Parameters**: Marker ID and optional new values
 - **Use Case**: Move markers, update marker appearance
 
-#### `removeCustomMarker(String markerId)`
-Remove custom marker.
-- **Difficulty**: Easy (Remove DrapeApi overlay)
-- **Parameters**: Marker ID
-- **Use Case**: Clear temporary markers, cleanup
+#### `removeCustomMarker(int markerId)` -- IMPLEMENTED (v0.1.25)
+See [Existing APIs > Custom Markers](#custom-markers).
+
+#### `clearCustomMarkers()` -- IMPLEMENTED (v0.1.25)
+See [Existing APIs > Custom Markers](#custom-markers).
 
 #### `addPolyline(List<LatLon> points, {Color color, double width}) -> String polylineId`
 Draw polyline on map.
@@ -900,17 +953,17 @@ Enable/disable large fonts for accessibility.
 
 ### Location Services
 
-#### `enableMyLocation(bool enable)`
-Enable/disable "my location" marker and tracking.
-- **Difficulty**: Medium (Framework has `ConnectToGpsTracker()` / `DisconnectFromGpsTracker()` and position mode)
-- **Parameters**: Whether to show user location
-- **Use Case**: Location-based apps, "find me" feature
+#### `enableMyLocation(bool enable)` -- IMPLEMENTED (v0.1.25)
+See [Existing APIs > Location Services](#location-services).
 
-#### `setMyLocationMode(MyLocationMode mode)`
-Set location display mode (none, normal, compass, navigation).
-- **Difficulty**: Medium (Framework has `SetMyPositionModeListener()` and `GetMyPositionMode()`)
-- **Parameters**: Location mode enum
-- **Use Case**: Different location tracking modes, navigation UI
+#### `setMyLocationMode(MyLocationMode mode)` -- IMPLEMENTED (v0.1.25)
+See [Existing APIs > Location Services](#location-services).
+
+#### `onLocationUpdate(...)` -- IMPLEMENTED (v0.1.25)
+See [Existing APIs > Location Services](#location-services).
+
+#### `onCompassUpdate(...)` -- IMPLEMENTED (v0.1.25)
+See [Existing APIs > Location Services](#location-services).
 
 #### `getMyLocation() -> Location?`
 Get current device location if available.

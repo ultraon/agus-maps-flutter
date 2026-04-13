@@ -131,8 +131,8 @@ class AgusMapsFlutterBindings {
   late final _comaps_set_localePtr =
       _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Char>)>>(
           'comaps_set_locale');
-  late final _comaps_set_locale = _comaps_set_localePtr
-      .asFunction<void Function(ffi.Pointer<ffi.Char>)>();
+  late final _comaps_set_locale =
+      _comaps_set_localePtr.asFunction<void Function(ffi.Pointer<ffi.Char>)>();
 
   void comaps_set_view(
     double lat,
@@ -408,6 +408,173 @@ class AgusMapsFlutterBindings {
           'comaps_get_registered_maps_count');
   late final _comaps_get_registered_maps_count =
       _comaps_get_registered_maps_countPtr.asFunction<int Function()>();
+
+  /// Get current viewport center in WGS84 coordinates.
+  /// lat/lon are output pointers. Returns (0,0) if framework is not ready.
+  void comaps_get_viewport_center(
+    ffi.Pointer<ffi.Double> lat,
+    ffi.Pointer<ffi.Double> lon,
+  ) {
+    return _comaps_get_viewport_center(
+      lat,
+      lon,
+    );
+  }
+
+  late final _comaps_get_viewport_centerPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<ffi.Double>,
+              ffi.Pointer<ffi.Double>)>>('comaps_get_viewport_center');
+  late final _comaps_get_viewport_center =
+      _comaps_get_viewport_centerPtr.asFunction<
+          void Function(ffi.Pointer<ffi.Double>, ffi.Pointer<ffi.Double>)>();
+
+  /// Get current zoom level (draw scale).
+  /// Returns 0 if framework is not ready.
+  int comaps_get_current_zoom() {
+    return _comaps_get_current_zoom();
+  }
+
+  late final _comaps_get_current_zoomPtr =
+      _lookup<ffi.NativeFunction<ffi.Int Function()>>(
+          'comaps_get_current_zoom');
+  late final _comaps_get_current_zoom =
+      _comaps_get_current_zoomPtr.asFunction<int Function()>();
+
+  /// Feed a GPS location update to the native engine.
+  /// The engine uses this to display the native "my position" marker.
+  /// timestampMs: Unix epoch milliseconds
+  void comaps_on_location_update(
+    double lat,
+    double lon,
+    double accuracy,
+    double bearing,
+    double speed,
+    int timestampMs,
+  ) {
+    return _comaps_on_location_update(
+      lat,
+      lon,
+      accuracy,
+      bearing,
+      speed,
+      timestampMs,
+    );
+  }
+
+  late final _comaps_on_location_updatePtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Void Function(ffi.Double, ffi.Double, ffi.Double, ffi.Double,
+              ffi.Double, ffi.Int64)>>('comaps_on_location_update');
+  late final _comaps_on_location_update = _comaps_on_location_updatePtr
+      .asFunction<void Function(double, double, double, double, double, int)>();
+
+  /// Feed a compass heading update to the native engine.
+  /// magneticNorth: heading in degrees (0-360)
+  /// trueNorth: heading in degrees (0-360), use -1 if unavailable
+  void comaps_on_compass_update(
+    double magneticNorth,
+    double trueNorth,
+  ) {
+    return _comaps_on_compass_update(
+      magneticNorth,
+      trueNorth,
+    );
+  }
+
+  late final _comaps_on_compass_updatePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Double, ffi.Double)>>(
+          'comaps_on_compass_update');
+  late final _comaps_on_compass_update =
+      _comaps_on_compass_updatePtr.asFunction<void Function(double, double)>();
+
+  /// Enable or disable the native "my position" marker.
+  /// enable: 1 = enable, 0 = disable
+  void comaps_enable_my_location(
+    int enable,
+  ) {
+    return _comaps_enable_my_location(
+      enable,
+    );
+  }
+
+  late final _comaps_enable_my_locationPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_enable_my_location');
+  late final _comaps_enable_my_location =
+      _comaps_enable_my_locationPtr.asFunction<void Function(int)>();
+
+  /// Set my-position mode.
+  /// mode matches location::EMyPositionMode:
+  /// 0 = PendingPosition, 1 = NotFollowNoPosition, 2 = NotFollow,
+  /// 3 = Follow, 4 = FollowAndRotate
+  /// Currently cycles through modes via SwitchMyPositionNextMode().
+  void comaps_set_my_location_mode(
+    int mode,
+  ) {
+    return _comaps_set_my_location_mode(
+      mode,
+    );
+  }
+
+  late final _comaps_set_my_location_modePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_set_my_location_mode');
+  late final _comaps_set_my_location_mode =
+      _comaps_set_my_location_modePtr.asFunction<void Function(int)>();
+
+  /// Add a custom marker at the given WGS84 coordinates.
+  /// iconId: optional icon identifier (pass NULL for default pin)
+  /// label: optional label text (pass NULL for no label)
+  /// Returns: positive marker ID on success, negative on error.
+  int comaps_add_custom_marker(
+    double lat,
+    double lon,
+    ffi.Pointer<ffi.Char> iconId,
+    ffi.Pointer<ffi.Char> label,
+  ) {
+    return _comaps_add_custom_marker(
+      lat,
+      lon,
+      iconId,
+      label,
+    );
+  }
+
+  late final _comaps_add_custom_markerPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int Function(ffi.Double, ffi.Double, ffi.Pointer<ffi.Char>,
+              ffi.Pointer<ffi.Char>)>>('comaps_add_custom_marker');
+  late final _comaps_add_custom_marker =
+      _comaps_add_custom_markerPtr.asFunction<
+          int Function(
+              double, double, ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Char>)>();
+
+  /// Remove a custom marker by its ID (returned by comaps_add_custom_marker).
+  void comaps_remove_custom_marker(
+    int markerId,
+  ) {
+    return _comaps_remove_custom_marker(
+      markerId,
+    );
+  }
+
+  late final _comaps_remove_custom_markerPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_remove_custom_marker');
+  late final _comaps_remove_custom_marker =
+      _comaps_remove_custom_markerPtr.asFunction<void Function(int)>();
+
+  /// Remove all custom markers.
+  void comaps_clear_custom_markers() {
+    return _comaps_clear_custom_markers();
+  }
+
+  late final _comaps_clear_custom_markersPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function()>>(
+          'comaps_clear_custom_markers');
+  late final _comaps_clear_custom_markers =
+      _comaps_clear_custom_markersPtr.asFunction<void Function()>();
 
   void agus_native_create_surface(
     int width,

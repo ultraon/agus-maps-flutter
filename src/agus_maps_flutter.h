@@ -171,6 +171,59 @@ FFI_PLUGIN_EXPORT int comaps_deregister_map(const char* fullPath);
 FFI_PLUGIN_EXPORT int comaps_get_registered_maps_count(void);
 
 // =============================================================================
+// Viewport Query Functions
+// =============================================================================
+
+// Get current viewport center in WGS84 coordinates.
+// lat/lon are output pointers. Returns (0,0) if framework is not ready.
+FFI_PLUGIN_EXPORT void comaps_get_viewport_center(double* lat, double* lon);
+
+// Get current zoom level (draw scale).
+// Returns 0 if framework is not ready.
+FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void);
+
+// =============================================================================
+// Location Services
+// =============================================================================
+
+// Feed a GPS location update to the native engine.
+// The engine uses this to display the native "my position" marker.
+// timestampMs: Unix epoch milliseconds
+FFI_PLUGIN_EXPORT void comaps_on_location_update(double lat, double lon, double accuracy, double bearing, double speed, int64_t timestampMs);
+
+// Feed a compass heading update to the native engine.
+// magneticNorth: heading in degrees (0-360)
+// trueNorth: heading in degrees (0-360), use -1 if unavailable
+FFI_PLUGIN_EXPORT void comaps_on_compass_update(double magneticNorth, double trueNorth);
+
+// Enable or disable the native "my position" marker.
+// enable: 1 = enable, 0 = disable
+FFI_PLUGIN_EXPORT void comaps_enable_my_location(int enable);
+
+// Set my-position mode.
+// mode matches location::EMyPositionMode:
+//   0 = PendingPosition, 1 = NotFollowNoPosition, 2 = NotFollow,
+//   3 = Follow, 4 = FollowAndRotate
+// Currently cycles through modes via SwitchMyPositionNextMode().
+FFI_PLUGIN_EXPORT void comaps_set_my_location_mode(int mode);
+
+// =============================================================================
+// Custom Marker Functions
+// =============================================================================
+
+// Add a custom marker at the given WGS84 coordinates.
+// iconId: optional icon identifier (pass NULL for default pin)
+// label: optional label text (pass NULL for no label)
+// Returns: positive marker ID on success, negative on error.
+FFI_PLUGIN_EXPORT int comaps_add_custom_marker(double lat, double lon, const char* iconId, const char* label);
+
+// Remove a custom marker by its ID (returned by comaps_add_custom_marker).
+FFI_PLUGIN_EXPORT void comaps_remove_custom_marker(int markerId);
+
+// Remove all custom markers.
+FFI_PLUGIN_EXPORT void comaps_clear_custom_markers(void);
+
+// =============================================================================
 // Native Surface Functions (for Windows/Desktop)
 // =============================================================================
 

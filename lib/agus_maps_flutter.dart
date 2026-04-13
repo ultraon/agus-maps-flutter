@@ -399,6 +399,117 @@ Future<bool> destroyMapSurface() {
   return _hostApi.destroyMapSurface();
 }
 
+// =============================================================================
+// Viewport Query Functions
+// =============================================================================
+
+/// Get current viewport center coordinates.
+/// Returns (latitude, longitude) in WGS84.
+/// Returns (0.0, 0.0) if the framework is not initialized.
+(double lat, double lon) getViewportCenter() {
+  final latPtr = malloc<Double>();
+  final lonPtr = malloc<Double>();
+  try {
+    _bindings.comaps_get_viewport_center(latPtr, lonPtr);
+    return (latPtr.value, lonPtr.value);
+  } finally {
+    malloc.free(latPtr);
+    malloc.free(lonPtr);
+  }
+}
+
+/// Get current zoom level (draw scale).
+/// Returns 0 if the framework is not initialized.
+int getCurrentZoom() {
+  return _bindings.comaps_get_current_zoom();
+}
+
+// =============================================================================
+// Location Services
+// =============================================================================
+
+/// My-position display mode.
+/// Values match native location::EMyPositionMode.
+enum MyLocationMode {
+  /// Position is being acquired but not yet available.
+  pendingPosition, // 0
+  /// Position unknown, not following.
+  notFollowNoPosition, // 1
+  /// Position known, map does not follow.
+  notFollow, // 2
+  /// Map centers on current position.
+  follow, // 3
+  /// Map centers on current position and rotates with compass.
+  followAndRotate, // 4
+}
+
+/// Feed a GPS location update to the native engine.
+///
+/// The engine uses this to position the native "my location" marker.
+/// [timestampMs] is Unix epoch milliseconds.
+void onLocationUpdate(
+  double lat,
+  double lon,
+  double accuracy,
+  double bearing,
+  double speed,
+  int timestampMs,
+) {
+  _bindings.comaps_on_location_update(lat, lon, accuracy, bearing, speed, timestampMs);
+}
+
+/// Feed a compass heading update to the native engine.
+///
+/// [magneticNorth] heading in degrees (0-360).
+/// [trueNorth] heading in degrees (0-360), pass -1 if unavailable.
+void onCompassUpdate(double magneticNorth, {double trueNorth = -1}) {
+  _bindings.comaps_on_compass_update(magneticNorth, trueNorth);
+}
+
+/// Enable or disable the native "my position" marker.
+void enableMyLocation(bool enable) {
+  _bindings.comaps_enable_my_location(enable ? 1 : 0);
+}
+
+/// Set the my-position display mode.
+void setMyLocationMode(MyLocationMode mode) {
+  _bindings.comaps_set_my_location_mode(mode.index);
+}
+
+// =============================================================================
+// Custom Marker Functions
+// =============================================================================
+
+/// Add a custom marker at the given WGS84 coordinates.
+///
+/// [iconId] optional icon identifier (null for default pin).
+/// [label] optional label text (null for no label).
+/// Returns a positive marker ID on success, negative on error.
+int addCustomMarker(double lat, double lon, {String? iconId, String? label}) {
+  final Pointer<Char> iconPtr = iconId != null
+      ? iconId.toNativeUtf8().cast<Char>()
+      : nullptr;
+  final Pointer<Char> labelPtr = label != null
+      ? label.toNativeUtf8().cast<Char>()
+      : nullptr;
+  try {
+    return _bindings.comaps_add_custom_marker(lat, lon, iconPtr, labelPtr);
+  } finally {
+    if (iconPtr != nullptr) malloc.free(iconPtr);
+    if (labelPtr != nullptr) malloc.free(labelPtr);
+  }
+}
+
+/// Remove a custom marker by its ID.
+void removeCustomMarker(int markerId) {
+  _bindings.comaps_remove_custom_marker(markerId);
+}
+
+/// Remove all custom markers.
+void clearCustomMarkers() {
+  _bindings.comaps_clear_custom_markers();
+}
+
 /// Controller for programmatic control of an AgusMap.
 ///
 /// Use this to move the map, change zoom level, and other operations.
@@ -421,14 +532,74 @@ class AgusMapController {
 
   /// Zoom in by one level.
   void zoomIn() {
-    // TODO: Implement zoom level tracking and relative zoom
-    debugPrint('[AgusMapController] zoomIn not yet implemented');
+    final zoom = getCurrentZoom();
+    final (lat, lon) = getViewportCenter();
+    if (zoom < 20) {
+      setView(lat, lon, zoom + 1);
+    }
   }
 
   /// Zoom out by one level.
   void zoomOut() {
-    // TODO: Implement zoom level tracking and relative zoom
-    debugPrint('[AgusMapController] zoomOut not yet implemented');
+    final zoom = getCurrentZoom();
+    final (lat, lon) = getViewportCenter();
+    if (zoom > 0) {
+      setView(lat, lon, zoom - 1);
+    }
+  }
+
+  /// Get current viewport center coordinates.
+  /// Returns (latitude, longitude) in WGS84.
+  (double lat, double lon) getCenter() {
+    return getViewportCenter();
+  }
+
+  /// Get current zoom level (0-20).
+  int getZoom() {
+    return getCurrentZoom();
+  }
+
+  /// Feed a GPS location update to the engine.
+  void updateLocation(
+    double lat,
+    double lon,
+    double accuracy,
+    double bearing,
+    double speed,
+    int timestampMs,
+  ) {
+    onLocationUpdate(lat, lon, accuracy, bearing, speed, timestampMs);
+  }
+
+  /// Feed a compass heading update to the engine.
+  void updateCompass(double magneticNorth, {double trueNorth = -1}) {
+    onCompassUpdate(magneticNorth, trueNorth: trueNorth);
+  }
+
+  /// Enable or disable the native "my position" marker.
+  void setMyLocationEnabled(bool enable) {
+    enableMyLocation(enable);
+  }
+
+  /// Set the my-position display mode.
+  void setLocationMode(MyLocationMode mode) {
+    setMyLocationMode(mode);
+  }
+
+  /// Add a custom marker at the given coordinates.
+  /// Returns a marker ID for later removal.
+  int addMarker(double lat, double lon, {String? iconId, String? label}) {
+    return addCustomMarker(lat, lon, iconId: iconId, label: label);
+  }
+
+  /// Remove a custom marker by its ID.
+  void removeMarker(int markerId) {
+    removeCustomMarker(markerId);
+  }
+
+  /// Remove all custom markers.
+  void clearMarkers() {
+    clearCustomMarkers();
   }
 }
 
