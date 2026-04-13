@@ -504,11 +504,11 @@ class AgusMapsFlutterBindings {
   late final _comaps_enable_my_location =
       _comaps_enable_my_locationPtr.asFunction<void Function(int)>();
 
-  /// Set my-position mode.
-  /// mode matches location::EMyPositionMode:
-  /// 0 = PendingPosition, 1 = NotFollowNoPosition, 2 = NotFollow,
-  /// 3 = Follow, 4 = FollowAndRotate
-  /// Currently cycles through modes via SwitchMyPositionNextMode().
+  /// Cycle to the next my-position mode.
+  /// The mode parameter is reserved for future use (direct mode set).
+  /// Currently always calls SwitchMyPositionNextMode() regardless of value.
+  /// Native modes: PendingPosition(0), NotFollowNoPosition(1), NotFollow(2),
+  /// Follow(3), FollowAndRotate(4).
   void comaps_set_my_location_mode(
     int mode,
   ) {

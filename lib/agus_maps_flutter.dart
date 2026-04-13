@@ -471,7 +471,9 @@ void enableMyLocation(bool enable) {
   _bindings.comaps_enable_my_location(enable ? 1 : 0);
 }
 
-/// Set the my-position display mode.
+/// Cycle to the next my-position display mode.
+/// The [mode] parameter is reserved for future direct-set support.
+/// Currently always cycles via SwitchMyPositionNextMode().
 void setMyLocationMode(MyLocationMode mode) {
   _bindings.comaps_set_my_location_mode(mode.index);
 }
@@ -482,8 +484,8 @@ void setMyLocationMode(MyLocationMode mode) {
 
 /// Add a custom marker at the given WGS84 coordinates.
 ///
-/// [iconId] optional icon identifier (null for default pin).
-/// [label] optional label text (null for no label).
+/// [iconId] reserved for future icon support (currently ignored by native).
+/// [label] reserved for future label support (currently ignored by native).
 /// Returns a positive marker ID on success, negative on error.
 int addCustomMarker(double lat, double lon, {String? iconId, String? label}) {
   final Pointer<Char> iconPtr = iconId != null
@@ -514,6 +516,9 @@ void clearCustomMarkers() {
 ///
 /// Use this to move the map, change zoom level, and other operations.
 class AgusMapController {
+  static const int kMinZoom = 0;
+  static const int kMaxZoom = 20;
+
   /// Move the map to the specified coordinates and zoom level.
   ///
   /// [lat] and [lon] specify the center point in WGS84 coordinates.
@@ -534,7 +539,7 @@ class AgusMapController {
   void zoomIn() {
     final zoom = getCurrentZoom();
     final (lat, lon) = getViewportCenter();
-    if (zoom < 20) {
+    if (zoom < kMaxZoom) {
       setView(lat, lon, zoom + 1);
     }
   }
@@ -543,7 +548,7 @@ class AgusMapController {
   void zoomOut() {
     final zoom = getCurrentZoom();
     final (lat, lon) = getViewportCenter();
-    if (zoom > 0) {
+    if (zoom > kMinZoom) {
       setView(lat, lon, zoom - 1);
     }
   }

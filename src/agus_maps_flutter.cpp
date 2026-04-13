@@ -1291,11 +1291,15 @@ FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void) {
 // =============================================================================
 
 FFI_PLUGIN_EXPORT void comaps_on_location_update(double lat, double lon, double accuracy, double bearing, double speed, int64_t timestampMs) {
-    if (!g_framework) {
+    if (!g_framework || !g_drapeEngineCreated) {
         return;
     }
     location::GpsInfo gpsInfo;
+#ifdef __APPLE__
     gpsInfo.m_source = location::EAppleNative;
+#else
+    gpsInfo.m_source = location::EAndroidNative;
+#endif
     gpsInfo.m_latitude = lat;
     gpsInfo.m_longitude = lon;
     gpsInfo.m_horizontalAccuracy = accuracy;
@@ -1306,7 +1310,7 @@ FFI_PLUGIN_EXPORT void comaps_on_location_update(double lat, double lon, double 
 }
 
 FFI_PLUGIN_EXPORT void comaps_on_compass_update(double magneticNorth, double trueNorth) {
-    if (!g_framework) {
+    if (!g_framework || !g_drapeEngineCreated) {
         return;
     }
     // CompassInfo.m_bearing is in radians; convert from degrees
@@ -1369,16 +1373,13 @@ FFI_PLUGIN_EXPORT void comaps_remove_custom_marker(int markerId) {
         return;
     }
 
-    kml::MarkId nativeId;
-    {
-        std::lock_guard<std::mutex> lock(g_markerMutex);
-        auto it = g_customMarkers.find(markerId);
-        if (it == g_customMarkers.end()) {
-            return;
-        }
-        nativeId = it->second;
-        g_customMarkers.erase(it);
+    std::lock_guard<std::mutex> lock(g_markerMutex);
+    auto it = g_customMarkers.find(markerId);
+    if (it == g_customMarkers.end()) {
+        return;
     }
+    kml::MarkId nativeId = it->second;
+    g_customMarkers.erase(it);
 
     auto editSession = g_framework->GetBookmarkManager().GetEditSession();
     editSession.DeleteUserMark(nativeId);

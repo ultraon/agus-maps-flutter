@@ -200,11 +200,11 @@ FFI_PLUGIN_EXPORT void comaps_on_compass_update(double magneticNorth, double tru
 // enable: 1 = enable, 0 = disable
 FFI_PLUGIN_EXPORT void comaps_enable_my_location(int enable);
 
-// Set my-position mode.
-// mode matches location::EMyPositionMode:
-//   0 = PendingPosition, 1 = NotFollowNoPosition, 2 = NotFollow,
-//   3 = Follow, 4 = FollowAndRotate
-// Currently cycles through modes via SwitchMyPositionNextMode().
+// Cycle to the next my-position mode.
+// The mode parameter is reserved for future use (direct mode set).
+// Currently always calls SwitchMyPositionNextMode() regardless of value.
+// Native modes: PendingPosition(0), NotFollowNoPosition(1), NotFollow(2),
+// Follow(3), FollowAndRotate(4).
 FFI_PLUGIN_EXPORT void comaps_set_my_location_mode(int mode);
 
 // =============================================================================
