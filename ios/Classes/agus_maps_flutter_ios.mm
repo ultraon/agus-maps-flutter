@@ -22,6 +22,7 @@
 #include <sstream>
 #include <iomanip>
 #include <string_view>
+#include <unordered_map>
 
 // CoMaps Framework includes
 #include "base/logging.hpp"
@@ -29,11 +30,16 @@
 #include "map/place_page_info.hpp"
 #include "indexer/feature_meta.hpp"
 #include "platform/local_country_file.hpp"
+#include "platform/location.hpp"
 #include "drape/graphics_context_factory.hpp"
 #include "drape_frontend/visual_params.hpp"
 #include "drape_frontend/user_event_stream.hpp"
 #include "drape_frontend/active_frame_callback.hpp"
 #include "geometry/mercator.hpp"
+#include "map/gps_tracker.hpp"
+#include "map/bookmark_manager.hpp"
+#include "map/user_mark.hpp"
+#include "kml/types.hpp"
 
 // Our Metal context factory
 #include "AgusMetalContextFactory.h"
@@ -994,8 +1000,135 @@ extern "C" FFI_PLUGIN_EXPORT void agus_render_frame(void) {
     if (!g_framework || !g_drapeEngineCreated) {
         return;
     }
-    
+
     // The DrapeEngine handles rendering internally
     // We just need to ensure the render loop is running
     // Frame completion will trigger agus_notify_frame_ready
+}
+
+#pragma mark - Viewport Inspection (Story 1.5)
+
+FFI_PLUGIN_EXPORT void comaps_get_viewport_center(double* lat, double* lon) {
+    if (!g_framework || !g_drapeEngineCreated || !lat || !lon) {
+        if (lat) *lat = 0.0;
+        if (lon) *lon = 0.0;
+        return;
+    }
+    m2::PointD center = g_framework->GetViewportCenter();
+    ms::LatLon latLon = mercator::ToLatLon(center);
+    *lat = latLon.m_lat;
+    *lon = latLon.m_lon;
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return 0;
+    }
+    return g_framework->GetDrawScale();
+}
+
+#pragma mark - Location Services (Story 1.5)
+
+FFI_PLUGIN_EXPORT void comaps_on_location_update(double lat, double lon, double accuracy, double bearing, double speed, int64_t timestampMs) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    location::GpsInfo gpsInfo;
+    gpsInfo.m_source = location::EAppleNative;
+    gpsInfo.m_latitude = lat;
+    gpsInfo.m_longitude = lon;
+    gpsInfo.m_horizontalAccuracy = accuracy;
+    gpsInfo.m_bearing = bearing;
+    gpsInfo.m_speed = speed;
+    gpsInfo.m_timestamp = static_cast<double>(timestampMs) / 1000.0;
+    g_framework->OnLocationUpdate(gpsInfo);
+}
+
+FFI_PLUGIN_EXPORT void comaps_on_compass_update(double magneticNorth, double trueNorth) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    // CompassInfo.m_bearing is in radians; convert from degrees
+    static constexpr double kDegToRad = 3.14159265358979323846 / 180.0;
+    double headingDeg = trueNorth >= 0 ? trueNorth : magneticNorth;
+    location::CompassInfo compassInfo;
+    compassInfo.m_bearing = headingDeg * kDegToRad;
+    g_framework->OnCompassUpdate(compassInfo);
+}
+
+FFI_PLUGIN_EXPORT void comaps_enable_my_location(int enable) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    if (enable) {
+        g_framework->ConnectToGpsTracker();
+    } else {
+        g_framework->DisconnectFromGpsTracker();
+    }
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_my_location_mode(int mode) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    // Mode values match location::EMyPositionMode but the SDK ignores the
+    // argument and always cycles via SwitchMyPositionNextMode (Story 1.5 D1).
+    (void)mode;
+    g_framework->SwitchMyPositionNextMode();
+}
+
+#pragma mark - Custom Markers (Story 1.5)
+
+static std::atomic<int> g_nextMarkerId{1};
+static std::unordered_map<int, kml::MarkId> g_customMarkers;
+static std::mutex g_markerMutex;
+
+FFI_PLUGIN_EXPORT int comaps_add_custom_marker(double lat, double lon, const char* iconId, const char* label) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return -1;
+    }
+    (void)iconId;
+    (void)label;
+
+    auto editSession = g_framework->GetBookmarkManager().GetEditSession();
+    auto * mark = editSession.CreateUserMark<StaticMarkPoint>(
+        m2::PointD(mercator::FromLatLon(lat, lon)));
+    kml::MarkId nativeId = mark->GetId();
+
+    int externalId = g_nextMarkerId.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(g_markerMutex);
+        g_customMarkers[externalId] = nativeId;
+    }
+    return externalId;
+}
+
+FFI_PLUGIN_EXPORT void comaps_remove_custom_marker(int markerId) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_markerMutex);
+    auto it = g_customMarkers.find(markerId);
+    if (it == g_customMarkers.end()) {
+        return;
+    }
+    kml::MarkId nativeId = it->second;
+    g_customMarkers.erase(it);
+
+    auto editSession = g_framework->GetBookmarkManager().GetEditSession();
+    editSession.DeleteUserMark(nativeId);
+}
+
+FFI_PLUGIN_EXPORT void comaps_clear_custom_markers(void) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_markerMutex);
+    auto editSession = g_framework->GetBookmarkManager().GetEditSession();
+    for (auto const & pair : g_customMarkers) {
+        editSession.DeleteUserMark(pair.second);
+    }
+    g_customMarkers.clear();
 }
