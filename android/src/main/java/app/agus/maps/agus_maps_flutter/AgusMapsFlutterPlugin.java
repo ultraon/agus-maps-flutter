@@ -271,18 +271,32 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
         // Ensure we call into Flutter engine APIs on the main thread.
         if (mainHandler != null) {
                         mainHandler.post(() -> {
-                                producer.scheduleFrame();
-                                if (!mapReadySent) {
-                                        mapReadySent = true;
-                                        sendMapReady(producer.id());
+                                // The plugin may have been detached between this post and execution
+                                // (engine teardown drains the main looper). Re-check before touching
+                                // SurfaceProducer / FlutterJNI APIs.
+                                final TextureRegistry.SurfaceProducer current = surfaceProducer;
+                                if (current == null || current != producer) return;
+                                try {
+                                        producer.scheduleFrame();
+                                        if (!mapReadySent) {
+                                                mapReadySent = true;
+                                                sendMapReady(producer.id());
+                                        }
+                                } catch (RuntimeException e) {
+                                        // FlutterJNI may have detached after this post but before execution.
+                                        android.util.Log.w(TAG, "scheduleFrame skipped (engine detached)", e);
                                 }
                         });
         } else {
-            producer.scheduleFrame();
-                        if (!mapReadySent) {
-                                mapReadySent = true;
-                                sendMapReady(producer.id());
-                        }
+            try {
+                producer.scheduleFrame();
+                            if (!mapReadySent) {
+                                    mapReadySent = true;
+                                    sendMapReady(producer.id());
+                            }
+            } catch (RuntimeException e) {
+                android.util.Log.w(TAG, "scheduleFrame skipped (engine detached)", e);
+            }
         }
   }
 
@@ -414,9 +428,47 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
 
   @Override
   public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
-    // Cleanup native frame callback
+    // Stop the native render thread from posting any further frame notifications
+    // BEFORE we touch the main-thread queue, so no new onFrameReady() calls land
+    // after we've drained pending ones.
     nativeCleanupFrameCallback();
+
+    // Drain plugin-owned main-thread runnables. onFrameReady() posts a lambda
+    // that calls SurfaceProducer.scheduleFrame(); if that lambda runs after
+    // FlutterJNI detaches, it crashes with "FlutterJNI is not attached to native".
+    if (mainHandler != null) {
+        mainHandler.removeCallbacksAndMessages(null);
+    }
+
+    // Release the SurfaceProducer while FlutterJNI is still attached. Flutter's
+    // ImageReaderSurfaceProducer queues its own deferred dequeueImage() lambda
+    // (the one in the crash stack); release() removes those callbacks
+    // synchronously. Without this, the queued lambda fires post-detach and
+    // calls scheduleEngineFrame -> FlutterJNI.scheduleFrame -> RuntimeException.
+    if (surfaceProducer != null) {
+        // Tell the CoMaps render thread to stop rendering BEFORE we abandon
+        // the underlying BufferQueue, otherwise the GPU driver logs repeated
+        // "BufferQueue has been abandoned" / "dequeueBuffer failed" errors as
+        // the render thread keeps trying to push frames into a dead surface.
+        try {
+            nativeOnSurfaceDestroyed();
+        } catch (Exception e) {
+            android.util.Log.w(TAG, "nativeOnSurfaceDestroyed failed on detach", e);
+        }
+        try {
+            surfaceProducer.setCallback(null);
+            surfaceProducer.release();
+        } catch (Exception e) {
+            android.util.Log.w(TAG, "Failed to release surface producer on detach", e);
+        }
+        surfaceProducer = null;
+        surfaceWidth = 0;
+        surfaceHeight = 0;
+        mapReadySent = false;
+    }
+
         AgusMapsApi.AgusMapsHostApi.setUp(binding.getBinaryMessenger(), null);
         flutterApi = null;
+        mainHandler = null;
   }
 }
