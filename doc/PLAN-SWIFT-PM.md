@@ -180,6 +180,7 @@ SwiftPM resources work differently:
 ```swift
 resources: [
     .copy("Resources/shaders_metal.metallib"),  // Copy as-is
+    .copy("Resources/shaders_metal_sim.metallib"),  // iOS Simulator build
     .process("PrivacyInfo.xcprivacy")           // Process (localization, etc.)
 ]
 ```

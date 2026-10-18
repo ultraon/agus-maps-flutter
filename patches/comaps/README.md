@@ -351,6 +351,7 @@ When building as a library (not a full application), test/quality tools aren't n
 - On iOS, searches `<AppBundle>/Frameworks` directory for plugin frameworks
 - On macOS, searches `<AppBundle>/Contents/Frameworks` directory for plugin frameworks
 - Adds extensive logging for debugging library location
+- Loads `shaders_metal_sim.metallib` instead of `shaders_metal.metallib` when built for the iOS Simulator (`TARGET_OS_SIMULATOR`), because the simulator's Metal runtime rejects libraries compiled for devices ("Target OS is incompatible: library was not compiled for the simulator")
 
 **Why it's needed:**
 Flutter plugins package Metal shaders in CocoaPods resource bundles (`resource_bundles`). The shader library is typically located at `<Framework>/Resources/<PluginName>_shaders.bundle/shaders_metal.metallib`. The framework structure differs between iOS and macOS:

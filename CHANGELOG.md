@@ -1,3 +1,9 @@
+## Unreleased
+
+### Fixes
+
+* **iOS Simulator map rendering**: The map no longer aborts on the iOS Simulator with "Target OS is incompatible: library was not compiled for the simulator". The build now also compiles the Metal shaders for the simulator into `shaders_metal_sim.metallib`. The iOS SDK archive and the podspec resource bundle ship it next to `shaders_metal.metallib`. The patched shader loader (`0017`) picks the simulator library when built for the simulator. Device builds load `shaders_metal.metallib` as before.
+
 ## 0.1.24
 
 ### Core API & Architecture
