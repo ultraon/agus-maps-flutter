@@ -325,6 +325,8 @@ jobs:
         run: |
           mkdir -p build/agus-binaries-ios/Resources
           cp ios/Resources/shaders_metal.metallib build/agus-binaries-ios/Resources/
+          # Built by tool/build.dart; the engine loads it on the iOS Simulator.
+          cp ios/Resources/shaders_metal_sim.metallib build/agus-binaries-ios/Resources/
           cd build/agus-binaries-ios
           zip -r ../agus-binaries-ios.zip CoMaps.xcframework Resources
           ls -lh ../agus-binaries-ios.zip

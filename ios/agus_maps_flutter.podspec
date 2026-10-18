@@ -223,8 +223,9 @@ sharing via Metal and CVPixelBuffer for optimal performance on iOS devices.
 
   # Resource bundles for Metal shaders
   # Use resource_bundles to ensure shaders end up in the app's main bundle
+  # shaders_metal_sim.metallib is the iOS Simulator build; the engine picks it there.
   s.resource_bundles = {
-    'agus_maps_flutter_shaders' => ['Resources/shaders_metal.metallib']
+    'agus_maps_flutter_shaders' => ['Resources/shaders_metal*.metallib']
   }
 
   # Localized type strings used by the core place page (iOS)

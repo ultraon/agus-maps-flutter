@@ -1,5 +1,5 @@
 diff --git a/libs/shaders/metal_program_pool.mm b/libs/shaders/metal_program_pool.mm
-index 3803d93cd..0545e9f39 100644
+index 3803d93cd..784e6b392 100644
 --- a/libs/shaders/metal_program_pool.mm
 +++ b/libs/shaders/metal_program_pool.mm
 @@ -5,6 +5,8 @@
@@ -11,22 +11,31 @@ index 3803d93cd..0545e9f39 100644
  #include <cstdint>
  #include <utility>
  #include <vector>
-@@ -217,7 +219,138 @@ MetalProgramPool::MetalProgramPool(id<MTLDevice> device)
+@@ -217,7 +219,146 @@ MetalProgramPool::MetalProgramPool(id<MTLDevice> device)
  {
    ProgramParams::Init();
  
+-  NSString * libPath = [[NSBundle mainBundle] pathForResource:@"shaders_metal" ofType:@"metallib"];
++  // The simulator's Metal runtime rejects libraries compiled for iOS devices,
++  // so the simulator build loads a separately compiled library.
++#if TARGET_OS_SIMULATOR
++  NSString * const shaderLibraryName = @"shaders_metal_sim";
++#else
++  NSString * const shaderLibraryName = @"shaders_metal";
++#endif
++
 +  // Search for metallib in various bundles (main bundle, framework bundles)
-   NSString * libPath = [[NSBundle mainBundle] pathForResource:@"shaders_metal" ofType:@"metallib"];
++  NSString * libPath = [[NSBundle mainBundle] pathForResource:shaderLibraryName ofType:@"metallib"];
 +  
 +  // If not found in main bundle, search in all loaded bundles (for CocoaPods/frameworks)
 +  if (!libPath)
 +  {
 +    for (NSBundle *bundle in [NSBundle allBundles])
 +    {
-+      libPath = [bundle pathForResource:@"shaders_metal" ofType:@"metallib"];
++      libPath = [bundle pathForResource:shaderLibraryName ofType:@"metallib"];
 +      if (libPath)
 +      {
-+        NSLog(@"Found shaders_metal.metallib in bundle: %@", [bundle bundlePath]);
++        NSLog(@"Found %@.metallib in bundle: %@", shaderLibraryName, [bundle bundlePath]);
 +        break;
 +      }
 +    }
@@ -37,10 +46,10 @@ index 3803d93cd..0545e9f39 100644
 +  {
 +    for (NSBundle *bundle in [NSBundle allFrameworks])
 +    {
-+      libPath = [bundle pathForResource:@"shaders_metal" ofType:@"metallib"];
++      libPath = [bundle pathForResource:shaderLibraryName ofType:@"metallib"];
 +      if (libPath)
 +      {
-+        NSLog(@"Found shaders_metal.metallib in framework: %@", [bundle bundlePath]);
++        NSLog(@"Found %@.metallib in framework: %@", shaderLibraryName, [bundle bundlePath]);
 +        break;
 +      }
 +    }
@@ -64,10 +73,10 @@ index 3803d93cd..0545e9f39 100644
 +          NSBundle *resourceBundle = [NSBundle bundleWithPath:bundlePath];
 +          if (resourceBundle)
 +          {
-+            libPath = [resourceBundle pathForResource:@"shaders_metal" ofType:@"metallib"];
++            libPath = [resourceBundle pathForResource:shaderLibraryName ofType:@"metallib"];
 +            if (libPath)
 +            {
-+              NSLog(@"Found shaders_metal.metallib in resource bundle: %@", bundlePath);
++              NSLog(@"Found %@.metallib in resource bundle: %@", shaderLibraryName, bundlePath);
 +              break;
 +            }
 +          }
@@ -107,10 +116,10 @@ index 3803d93cd..0545e9f39 100644
 +      if (!frameworkBundle) continue;
 +      
 +      // Check directly in framework resources
-+      libPath = [frameworkBundle pathForResource:@"shaders_metal" ofType:@"metallib"];
++      libPath = [frameworkBundle pathForResource:shaderLibraryName ofType:@"metallib"];
 +      if (libPath)
 +      {
-+        NSLog(@"Found shaders_metal.metallib in app framework: %@", frameworkPath);
++        NSLog(@"Found %@.metallib in app framework: %@", shaderLibraryName, frameworkPath);
 +        break;
 +      }
 +      
@@ -131,10 +140,10 @@ index 3803d93cd..0545e9f39 100644
 +          NSLog(@"Checking resource bundle: %@ (bundle=%@)", item, resourceBundle ? @"YES" : @"NO");
 +          if (resourceBundle)
 +          {
-+            libPath = [resourceBundle pathForResource:@"shaders_metal" ofType:@"metallib"];
++            libPath = [resourceBundle pathForResource:shaderLibraryName ofType:@"metallib"];
 +            if (libPath)
 +            {
-+              NSLog(@"Found shaders_metal.metallib in app framework resource bundle: %@", bundlePath);
++              NSLog(@"Found %@.metallib in app framework resource bundle: %@", shaderLibraryName, bundlePath);
 +              break;
 +            }
 +          }
@@ -144,7 +153,7 @@ index 3803d93cd..0545e9f39 100644
 +    }
 +  }
 +
-+  CHECK(libPath != nil, ("shaders_metal.metallib not found in any bundle!"));
++  CHECK(libPath != nil, ([shaderLibraryName UTF8String], ".metallib not found in any bundle!"));
 +  NSLog(@"Loading Metal shaders from: %@", libPath);
 +
    NSError * error = nil;

@@ -926,6 +926,44 @@ Future<void> _buildMetalShaders() async {
   } catch (e) {
     print('Warning: Failed to link Metal library: $e');
   }
+
+  await _buildSimulatorMetalLibrary(
+      metalFiles, shadersDir, path.join(repoRoot, 'ios', 'Resources'));
+}
+
+/// Build `shaders_metal_sim.metallib` for the iOS Simulator.
+///
+/// The simulator's Metal runtime rejects libraries compiled for devices or
+/// macOS, so the engine loads this separate library when it runs there.
+Future<void> _buildSimulatorMetalLibrary(
+    List<String> metalFiles, String shadersDir, String iosResources) async {
+  final tempDir = path.join(getBuildDir(), 'metal_temp_simulator');
+  final outputLib =
+      path.join(getBuildDir(), 'metal_shaders', 'shaders_metal_sim.metallib');
+  await ensureDir(tempDir);
+  await ensureDir(iosResources);
+
+  print('Compiling Metal shaders for the iOS Simulator...');
+  final airFiles = <String>[];
+  for (final metalFile in metalFiles) {
+    final name = path.basenameWithoutExtension(metalFile);
+    final airFile = path.join(tempDir, '$name.air');
+    await _runSimulatorMetal(
+        ['-c', '-I', shadersDir, '-o', airFile, metalFile]);
+    airFiles.add(airFile);
+  }
+
+  await _runSimulatorMetal(['-o', outputLib, ...airFiles]);
+  await File(outputLib)
+      .copy(path.join(iosResources, 'shaders_metal_sim.metallib'));
+  print('Copied ${path.basename(outputLib)} to ios/Resources/');
+}
+
+/// Run the Metal compiler or linker for the iOS Simulator target.
+Future<void> _runSimulatorMetal(List<String> arguments) async {
+  final target = 'air64-apple-ios${BuildConfig.iosDeploymentTarget}-simulator';
+  await runProcess('xcrun',
+      ['-sdk', 'iphonesimulator', 'metal', '-target', target, ...arguments]);
 }
 
 /// Setup CocoaPods for iOS or macOS
