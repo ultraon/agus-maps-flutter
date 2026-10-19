@@ -8,7 +8,7 @@ plugins {
 android {
     namespace = "app.agus.maps.agus_maps_flutter_example"
     compileSdk = 36
-    ndkVersion = "28.2.13676358"
+    ndkVersion = "29.0.14206865"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -30,6 +30,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
     }
 
 

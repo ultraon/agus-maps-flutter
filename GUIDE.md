@@ -27,9 +27,14 @@ The MWM (MapsWithMe) format is memory-mapped via `mmap()`. Only currently-visibl
 The render loop is "demand-driven" - the engine only renders when:
 - User interacts with the map (pan, zoom, rotate)
 - Animations are in progress
-- View state changes (resize, DPI change)
+- Real view state changes (orientation, split-screen/window resize, DPI change)
 
 When idle, CPU and GPU sleep, preserving battery life.
+
+Keyboard and search UI are treated as overlays above a stable map viewport on
+mobile platforms. Showing the keyboard must not resize the native map surface;
+only overlay controls, result panels, or future camera/content padding should
+adapt to keyboard occlusion.
 
 ### 4. Asset Integrity and Self-Healing
 
@@ -47,6 +52,35 @@ The build/runtime pipeline now applies two guardrails:
        `.comaps_data_extracted`.
     - If atlas files are missing/suspicious (placeholder-sized), extraction is
        forced and stale files are overwritten from bundled `flutter_assets`.
+
+### 5. DuckDB Data Layers
+
+DuckDB is the plugin's embedded persistence and analytics layer for user
+drawings, metadata, preset data layers, and custom query-driven geospatial
+layers. The dependency model mirrors CoMaps: `DUCKDB_TAG` pins
+`thirdparty/duckdb`, `DUCKDB_SPATIAL_TAG` pins `thirdparty/duckdb-spatial`, and
+local patches live under `patches/duckdb/` and `patches/duckdb-spatial/`.
+
+The required DuckDB extensions are `core_functions`, `parquet`, `json`, `icu`,
+`httpfs`, and `spatial`. Mobile builds statically embed the required extension
+set; desktop SDKs bundle private DuckDB artifacts rather than relying on a
+machine-wide DuckDB installation.
+
+macOS and iOS contributor builds now produce `DuckDB.xcframework` from the
+pinned DuckDB source, `duckdb-spatial`, and the pinned out-of-tree `httpfs`
+extension. The build uses DuckDB's merged vcpkg manifest for spatial
+dependencies and packages private static Apple framework artifacts for macOS,
+iOS device, and iOS simulator slices.
+
+The first macOS native bridge exposes DuckDB version/health checks,
+`writablePath/agus_layers.duckdb` app-database open/close, required extension
+loading, unrestricted SQL execution, and migration-file execution through Dart
+helpers in the public plugin library.
+
+DuckDB layers render through the native CoMaps/Drape path, not a Flutter overlay.
+First-party drawing layers use strict plugin-owned tables. User SQL is allowed to
+run arbitrary commands, but renderable query layers must return the documented
+contract in `doc/schemas/README.md`.
 
 ## SDK Distribution Model
 
@@ -68,11 +102,27 @@ cd agus-maps-flutter
 
 The build scripts handle:
 - Fetching CoMaps source code
+- Initializing pinned DuckDB and duckdb-spatial checkouts
 - Applying patches
 - Building native binaries for all platforms
 - Generating assets
 
 > **Important:** Do NOT set `AGUS_MAPS_HOME` when working as a contributor.
+
+For Apple platform work, prefer targeted contributor builds while iterating:
+
+```bash
+env -u AGUS_MAPS_HOME AGUS_MAPS_BUILD_MODE=contributor \
+  dart run tool/build.dart --build-binaries --platform ios 2>&1 | tee ./output.log
+
+env -u AGUS_MAPS_HOME AGUS_MAPS_BUILD_MODE=contributor \
+  dart run tool/build.dart --build-binaries --platform macos 2>&1 | tee ./output.log
+```
+
+The Dart build tool now applies CoMaps patches in deterministic filename order,
+fails fast on CMake configure/build errors, removes stale Apple package outputs
+before recreating `CoMaps.xcframework`, and builds Metal shaders before running
+CocoaPods setup for iOS/macOS.
 
 #### 2. CI/CD Environment
 
@@ -80,6 +130,11 @@ GitHub Actions builds are detected via `CI=true`. The workflow:
 1. Builds binaries from source
 2. Copies binaries to `{platform}/prebuilt/` directories
 3. Packages everything into `agus-maps-sdk-vX.Y.Z.zip`
+
+On Windows CI, CMake Visual Studio generator selection follows the installed
+Visual Studio instance with C++ tools. This avoids choosing a newer generator
+that CMake advertises before the hosted runner has the matching Visual Studio
+version installed.
 
 #### 3. Plugin Consumers (SDK-based)
 
@@ -103,9 +158,11 @@ agus-maps-sdk-vX.Y.Z/
 │   ├── armeabi-v7a/
 │   └── x86_64/
 ├── ios/Frameworks/
-│   └── CoMaps.xcframework/
+│   ├── CoMaps.xcframework/
+│   └── DuckDB.xcframework/        # DuckDB layer runtime
 ├── macos/Frameworks/
-│   └── CoMaps.xcframework/
+│   ├── CoMaps.xcframework/
+│   └── DuckDB.xcframework/        # DuckDB layer runtime
 ├── windows/prebuilt/x64/
 ├── linux/prebuilt/x64/
 ├── example/assets/
@@ -124,6 +181,11 @@ Uses CVPixelBuffer backed by IOSurface for true zero-copy rendering:
 2. Create MTLTexture from pixel buffer
 3. CoMaps renders to MTLTexture
 4. Flutter samples the texture directly
+
+The headless iOS/macOS XCFramework builds keep the native Apple networking and
+platform files, but use Monocypher for Ed25519 verification. CoMaps'
+`ed25519_apple.mm` imports Xcode-generated `platform-Swift.h`, which is not
+available when building the native engine through standalone CMake.
 
 ### Android (OpenGL ES)
 
@@ -229,6 +291,36 @@ dart run pigeon \
 
 Generated files are checked into version control and must not be edited by
 hand. Update the Pigeon source file and re-run generation instead.
+
+### Place Pages
+
+Tap selection is exposed as a native JSON payload and rendered by Flutter. iOS
+and macOS both emit readable `metadataTags` using CoMaps metadata keys from
+`feature_meta.hpp`, so the Dart sheet can show the same rich POI details on
+Apple platforms: Wikipedia links, phone numbers, IATA codes, elevation,
+internet access, and similar OSM metadata.
+
+Flutter remains the single place for display localization. Native code sends raw
+type keys and metadata tags; Dart normalizes and localizes them with the copied
+CoMaps string resources in `assets/localized_types/`.
+
+### Runtime Map Downloads
+
+Runtime downloads use the CoMaps `countries.txt` hierarchy instead of a flat
+list. `MirrorService.getCountriesData()` returns the full tree for UI browsing,
+while `getRegions()` returns only leaf regions for callers that need a flat list
+of downloadable `.mwm` files.
+
+The example Downloads tab starts from top-level country/region folders, expands
+into child folders or leaf files, and resolves group download/delete actions to
+their descendant leaves. Search shows flattened fuzzy matches at the root so
+direct matches can be downloaded quickly, while matching folder rows still
+expand to their normal children in source hierarchy order. A leaf result can
+appear both as a direct search result and under its expanded parent folder.
+
+Mirror defaults are aligned with the current CoMaps source list and merged with
+metaserver-only hosts from `https://cdn-us-1.comaps.app/servers` before probing.
+Legacy Organic Maps mirrors are not used as fallbacks.
 
 ## Performance Characteristics
 

@@ -93,7 +93,7 @@ The ICU library needs its data file for transliteration support. When resources 
    - `glUnmapBuffer`, `glMapBufferRange`, `glFlushMappedBufferRange`
    - `glGetStringi`
 2. **Windows:** Improves WGL extension loading with OES/EXT/ARB suffix fallbacks
-3. Adds shader debugging infrastructure with environment variable controls (`AGUS_VERBOSE_SHADER`, `AGUS_DUMP_SHADERS`)
+3. Adds shader debugging infrastructure with environment variable controls (`AGUS_VERBOSE_SHADER`, `AGUS_DUMP_SHADERS`); noisy WGL context/shader ID diagnostics only print when verbose shader logging is enabled
 4. Adds `glGetShaderSource` function pointer for shader debugging
 5. Adds comprehensive error handling and logging for shader compilation
 6. Stores shader sources for debugging purposes
@@ -229,11 +229,13 @@ The project targets Android API 24+ which has native GLES 3.0 support. Using nat
 1. Uses `CMAKE_CURRENT_SOURCE_DIR` instead of `CMAKE_SOURCE_DIR` for subdirectory builds
 2. Adds `/bigobj` for MSVC to handle unity builds
 3. Adds multi-config generator support (Visual Studio, Xcode) with generator expressions
-4. Adds `SKIP_QT` option to skip Qt dependencies
+4. Makes Qt discovery conditional on `SKIP_QT`
 5. Fixes Boost modular header include paths
-6. Adds `SKIP_TOOLS` option to skip generator tools
-7. Adds `SKIP_ANDROID_JNI` option for Flutter Android builds
-8. Makes Python protobuf check conditional on Qt builds
+6. Honors `SKIP_TOOLS` when adding desktop generator/tool targets
+7. Honors `SKIP_ANDROID_JNI` when adding the Android SDK JNI target
+8. Makes Python protobuf version checks conditional on Qt desktop builds while preserving CoMaps' `>=3.20,<4.0` requirement
+9. Keeps the upstream Python virtualenv preference added in CoMaps `v2026.04.23-19`
+10. Disables IPO/LTO for Apple `SKIP_QT` static-library builds so XCFramework packaging receives Mach-O object members instead of LLVM bitcode wrappers
 
 **Why it's needed:**
 When CoMaps is used as a subdirectory of another project (like a Flutter plugin), many CMake assumptions break. This patch makes the build system flexible enough for embedded use.
@@ -324,7 +326,7 @@ When building for macOS without the full app context, certain platform functions
 **Purpose:** Makes search test subdirectories conditional on `SKIP_TESTS`.
 
 **What it does:**
-- Changes `if(PLATFORM_DESKTOP)` to `if(PLATFORM_DESKTOP AND NOT SKIP_TESTS)`
+- Changes `if(NOT (SKIP_TOOLS AND SKIP_TESTS))` to `if(NOT SKIP_TESTS)`
 - Prevents building search quality tools when tests are skipped
 
 **Why it's needed:**
@@ -348,6 +350,7 @@ When building as a library (not a full application), test/quality tools aren't n
 - Searches all loaded bundles
 - Searches all frameworks
 - Searches nested `.bundle` directories within frameworks
+- Searches SwiftPM resource bundles in the app resources directory
 - On iOS, searches `<AppBundle>/Frameworks` directory for plugin frameworks
 - On macOS, searches `<AppBundle>/Contents/Frameworks` directory for plugin frameworks
 - Adds extensive logging for debugging library location
@@ -357,6 +360,10 @@ When building as a library (not a full application), test/quality tools aren't n
 Flutter plugins package Metal shaders in CocoaPods resource bundles (`resource_bundles`). The shader library is typically located at `<Framework>/Resources/<PluginName>_shaders.bundle/shaders_metal.metallib`. The framework structure differs between iOS and macOS:
 - iOS: `Runner.app/Frameworks/agus_maps_flutter.framework/agus_maps_flutter_shaders.bundle/`
 - macOS: `Runner.app/Contents/Frameworks/agus_maps_flutter.framework/Resources/agus_maps_flutter_shaders.bundle/Contents/Resources/`
+With Swift Package Manager, the plugin does not necessarily produce an
+`agus_maps_flutter.framework`; package resources are copied as app resource
+bundles such as
+`Runner.app/Contents/Resources/agus_maps_flutter_agus_maps_flutter.bundle/`.
 
 **Without this patch:**
 - Metal shader library would not be found in Flutter plugin builds on iOS
@@ -491,16 +498,23 @@ Windows `wingdi.h` defines `#define ERROR 0`, which conflicts with protobuf's `G
 
 **Category:** Windows C Runtime Safety
 
-**Purpose:** Fixes `std::toupper` call with unsigned char cast.
+**Purpose:** Fixes Windows logging runtime assertions during parsing and early
+startup.
 
 **What it does:**
 - Casts character to `unsigned char` before passing to `std::toupper`
+- Uses constant-initialized default log levels instead of function-call
+  initialization for global atomics.
 
 **Why it's needed:**
 On Windows MSVC, `std::toupper(char)` can trigger an assertion failure if the character value is negative (e.g., non-ASCII characters). Casting to `unsigned char` ensures defined behavior.
+Windows debug plugin startup can also log while global initialization order is
+still settling; function-call initialization can leave `g_LogAbortLevel`
+zero-initialized long enough for a normal `LINFO` startup log to abort.
 
 **Without this patch:**
 - Debug assertion failure on Windows with non-ASCII log level strings
+- Debug assertion failure on Windows during early plugin startup logging
 - Potential crash in debug builds
 
 
@@ -755,6 +769,7 @@ Shader compilers may optimize out unused attributes. The original assert crashes
 **What it does:**
 - Includes `active_frame_callback.hpp`
 - Calls `NotifyActiveFrame()` when `isActiveFrame` is true
+- Refreshed against the `v2026.04.23-19` `RenderFrame()` layout
 
 **Why it's needed:**
 This is the actual integration point for the callback mechanism created in patch 0012.
@@ -841,18 +856,21 @@ Same Windows MSVC debug runtime issue.
 
 **File Modified:** `libs/platform/platform_win.cpp`
 
-**Category:** Windows Build / Name Resolution
+**Category:** Windows Build / Name Resolution / Release Logging
 
-**Purpose:** Fixes `bind` to use `std::bind` explicitly.
+**Purpose:** Fixes `bind` to use `std::bind` explicitly and keeps early Windows platform path diagnostics debug-only.
 
 **What it does:**
 - Changes `bind(&CloseHandle, hFile)` to `std::bind(&CloseHandle, hFile)`
+- Wraps startup `Resources/Writable/Tmp/Settings Directory` `INFO` logs in a debug-only guard so release builds do not print them before the plugin log handler is installed
 
 **Why it's needed:**
 Without the `std::` prefix, the compiler might find wrong `bind` overloads depending on includes and namespace usage.
+The platform path diagnostics are useful while debugging startup paths, but noisy in release because they run before the Windows plugin can install its CoMaps log filter.
 
 **Without this patch:**
 - Potential compilation errors or wrong function binding
+- Release Windows apps print early platform path diagnostics to stderr
 
 
 ### 0047-libs-routing-lanes-lanes_parser-cpp.patch
@@ -940,6 +958,7 @@ Same Windows MSVC debug runtime issue.
 
 **What it does:**
 - Casts character to `unsigned char` in house number modification
+- Refreshed for the upstream `localisation::kRussianLanguageIndex` condition used in `v2026.04.23-19`
 
 **Why it's needed:**
 Same Windows MSVC debug runtime issue.
@@ -1014,14 +1033,15 @@ Unity builds combine many source files, exceeding MSVC's default object section 
 
 **What it does:**
 
-1. **iOS Fix:** Multiple changes for iOS platform
+1. **iOS Fixes:** Multiple changes for iOS platform
    - Changes `http_user_agent_ios.mm` → `http_session_manager.mm` (file renamed in CoMaps)
    - **Adds `localization.cpp` and `localization.hpp`** to `PLATFORM_IPHONE` block
    - iOS's `localization.mm` only implements 5 of 8 localization functions
    - The missing `GetLocalizedDistanceUnits`, `GetLocalizedAltitudeUnits`, `GetLocalizedSpeedUnits` are in `localization.cpp`
    - Without both files, iOS builds fail with "undefined symbol" linker errors
+   - `ed25519_apple.mm` depends on Xcode-generated `platform-Swift.h`, which is not produced by headless CMake builds, so Apple branches use Monocypher Ed25519 instead
 
-2. **Android with `SKIP_ANDROID_JNI`:** (lines 86-96)
+2. **Android with `SKIP_ANDROID_JNI`:**
    ```cmake
    elseif(SKIP_ANDROID_JNI AND ${PLATFORM_ANDROID})
      # Android build without JNI (for Flutter plugin with external platform impl)
@@ -1032,6 +1052,7 @@ Unity builds combine many source files, exceeding MSVC's default object section 
        http_uploader_background_dummy.cpp
        network_policy_dummy.cpp
        secure_storage_dummy.cpp
+       crypto/ed25519_monocypher.cpp
       )
     ```
    - Used when building for Flutter Android where platform implementation is external
@@ -1039,7 +1060,7 @@ Unity builds combine many source files, exceeding MSVC's default object section 
    - External code (`agus_platform.cpp`) provides `Platform::GetReader()` etc.
    - **Localization removed:** `localization_dummy.cpp` is NOT included; localization is provided by `agus_localization.cpp` in the Flutter plugin
 
-3. **macOS with `SKIP_QT`:** (lines 104-121)
+3. **macOS with `SKIP_QT`:**
    ```cmake
    elseif(SKIP_QT AND ${PLATFORM_MAC})
      # macOS build without Qt (for Flutter plugin)
@@ -1050,14 +1071,16 @@ Unity builds combine many source files, exceeding MSVC's default object section 
        http_thread_apple.mm
        http_uploader_apple.mm
        platform_mac.mm
+       crypto/ed25519_monocypher.cpp
        ...
      )
    ```
    - Used for Flutter macOS plugin (Metal rendering via podspec)
    - Uses native Apple HTTP/networking instead of Qt
    - **Localization removed:** `localization_dummy.cpp` is NOT included; localization is provided by `agus_localization.cpp` in the Flutter plugin
+   - Uses Monocypher Ed25519 because `ed25519_apple.mm` depends on the Xcode-generated `platform-Swift.h` header, which is not produced by this headless CMake build
 
-4. **Windows with `SKIP_QT`:** (lines 122-135)
+4. **Windows with `SKIP_QT`:**
    ```cmake
    elseif(SKIP_QT AND ${PLATFORM_WIN})
      # Windows build without Qt (for Flutter plugin)
@@ -1066,6 +1089,7 @@ Unity builds combine many source files, exceeding MSVC's default object section 
        gui_thread_win.cpp
        http_client_curl.cpp
        platform_win.cpp
+       crypto/ed25519_monocypher.cpp
        ...
      )
    ```
@@ -1073,7 +1097,7 @@ Unity builds combine many source files, exceeding MSVC's default object section 
    - Uses libcurl for HTTP instead of Qt::Network
    - **Localization removed:** `localization_dummy.cpp` is NOT included; localization is provided by `agus_localization.cpp` in the Flutter plugin
 
-5. **Linux with `SKIP_QT`:** (lines 136-150) **[NEW for Linux support]**
+5. **Linux with `SKIP_QT`:** **[NEW for Linux support]**
    ```cmake
    elseif(SKIP_QT AND ${PLATFORM_LINUX})
      # Linux build without Qt (for Flutter plugin with external platform impl)
@@ -1087,6 +1111,7 @@ Unity builds combine many source files, exceeding MSVC's default object section 
        platform_unix_impl.cpp
        platform_unix_impl.hpp
        secure_storage_dummy.cpp
+       crypto/ed25519_monocypher.cpp
      )
    ```
    - Used for Flutter Linux plugin (EGL/GLES3 rendering)
@@ -1095,7 +1120,9 @@ Unity builds combine many source files, exceeding MSVC's default object section 
    - Does NOT include `platform_linux.cpp` (requires Qt) - we provide our own
    - **Localization removed:** `localization_dummy.cpp` is NOT included; localization is provided by `agus_localization.cpp` in the Flutter plugin
 
-6. **Conditional Qt Linking:** (lines 237-239)
+6. **macOS Qt tool builds:** The desktop Qt macOS branch also uses `crypto/ed25519_monocypher.cpp`, because symbol/data generation invokes a Qt macOS CMake build outside Xcode. It keeps `platform_mac.mm` as the sole macOS `Platform` implementation; `platform_qt.cpp` and `platform_qt_version.cpp` are compiled only for Windows/Linux Qt builds to avoid duplicate `Platform` symbols.
+
+7. **Conditional Qt Linking:** (lines 237-239)
    ```cmake
    $<$<AND:$<BOOL:${PLATFORM_DESKTOP}>,$<NOT:$<BOOL:${SKIP_QT}>>>:Qt6::Core>
    $<$<AND:$<BOOL:${PLATFORM_LINUX}>,$<NOT:$<BOOL:${SKIP_QT}>>>:Qt6::Network>
@@ -1108,12 +1135,12 @@ Unity builds combine many source files, exceeding MSVC's default object section 
 
 | Platform | Condition | Key Source Files | Localization |
 |----------|-----------|------------------|--------------|
-| iOS | `PLATFORM_IPHONE` | `platform_ios.mm`, Apple HTTP, Metal | `localization.mm` + `localization.cpp` (iOS localization + unit conversions) |
-| Android (JNI) | `PLATFORM_ANDROID` | `platform_android.cpp`, JNI/APK reader | JNI localization |
-| Android (Flutter) | `SKIP_ANDROID_JNI AND PLATFORM_ANDROID` | Unix impl + curl + dummies | `agus_localization.cpp` |
-| macOS (Flutter) | `SKIP_QT AND PLATFORM_MAC` | `platform_mac.mm`, Apple HTTP | `agus_localization.cpp` |
-| Windows (Flutter) | `SKIP_QT AND PLATFORM_WIN` | `platform_win.cpp`, curl + dummies | `agus_localization.cpp` |
-| **Linux (Flutter)** | `SKIP_QT AND PLATFORM_LINUX` | Unix impl + curl + dummies | `agus_localization.cpp` |
+| iOS | `PLATFORM_IPHONE` | `platform_ios.mm`, Apple HTTP, Metal, Monocypher Ed25519 | `localization.mm` + `localization.cpp` (iOS localization + unit conversions) |
+| Android (JNI) | `PLATFORM_ANDROID` | `platform_android.cpp`, JNI/APK reader, Monocypher Ed25519 | JNI localization |
+| Android (Flutter) | `SKIP_ANDROID_JNI AND PLATFORM_ANDROID` | Unix impl + curl + dummies + Monocypher Ed25519 | `agus_localization.cpp` |
+| macOS (Flutter) | `SKIP_QT AND PLATFORM_MAC` | `platform_mac.mm`, Apple HTTP, Monocypher Ed25519 | `agus_localization.cpp` |
+| Windows (Flutter) | `SKIP_QT AND PLATFORM_WIN` | `platform_win.cpp`, curl + dummies + Monocypher Ed25519 | `agus_localization.cpp` |
+| **Linux (Flutter)** | `SKIP_QT AND PLATFORM_LINUX` | Unix impl + curl + dummies + Monocypher Ed25519 | `agus_localization.cpp` |
 | Desktop (Qt) | Default `else` | Qt-based platform, Qt::Network | `localization_dummy.cpp` |
 
 **Why it's needed:**
@@ -1126,6 +1153,7 @@ Flutter plugins cannot use Qt because:
 
 **Without this patch:**
 - iOS build fails: `http_user_agent_ios.mm: No such file or directory`
+- iOS headless CMake build fails: `platform-Swift.h` file not found from `ed25519_apple.mm`
 - Android Flutter build fails: Missing JNI symbols, wrong platform impl
 - macOS Flutter build fails: `Qt6::Core not found`
 - Windows Flutter build fails: `Qt6::Network not found`
@@ -1389,3 +1417,154 @@ implementation can be linked.
 **Without this patch:**
 - iOS/macOS builds can fail at link time with duplicate localization symbols.
 - Localization may be sourced from the wrong implementation.
+
+
+### 0071-tools-unix-generate-symbols-without-optipng.patch
+
+**File Modified:** `tools/unix/generate_symbols.sh`
+
+**Category:** Build Tooling / Asset Generation
+
+**Purpose:** Allows symbol atlas generation to continue when `optipng` is not
+installed.
+
+**What it does:**
+- Changes the `optipng` dependency from mandatory to optional.
+- Emits a warning when `optipng` is missing.
+- Skips only the PNG optimization pass while still generating `symbols.png` and
+  `symbols.sdf` for all DPI/style folders.
+- Passes `PYTHON3_EXECUTABLE` through to CMake when the Flutter build runner
+  selects a compatible local Python environment.
+- Passes `SKIP_QT_POSITIONING=true` during the symbol-generator configure so
+  QtPositioning is not required for atlas generation.
+
+**Why it's needed:**
+The Flutter build workflow needs valid CoMaps symbol atlases for map rendering.
+`optipng` only optimizes generated PNG files, but the upstream script exited
+before running the generator when `optipng` was absent. That allowed stale or
+zero-byte atlas assets to survive in `example/assets` and caused runtime
+texture creation errors. CoMaps also requires Python `protobuf >=3.20, <4.0`
+during CMake configure, so the script must accept the build runner’s selected
+Python interpreter instead of always using the system interpreter. The symbol
+generator does not use desktop location services, so it should not require the
+QtPositioning development package just because the top-level CoMaps configure
+includes `libs/platform`.
+
+**Without this patch:**
+- Contributor builds on machines without `optipng` fail to regenerate symbol
+  atlases.
+- Empty or missing `symbols.png` / `symbols.sdf` files can be copied into the
+  Flutter bundle.
+- The map renderer logs symbol texture errors and many style/icon lookup
+  failures at startup.
+- Systems with Python protobuf 4.x fail CMake configure even when a compatible
+  project virtual environment exists.
+- Systems without `qt6-positioning-dev` fail while building an unrelated
+  location service target.
+
+
+### 0072-libs-platform-location-service-skip-qt-positioning.patch
+
+**File Modified:** `libs/platform/location_service/CMakeLists.txt`
+
+**Category:** Build Tooling / Optional Qt Components
+
+**Purpose:** Allows tool-only CoMaps configures to skip the QtPositioning-backed
+desktop location service.
+
+**What it does:**
+- Adds a `SKIP_QT_POSITIONING` guard around the Linux QtPositioning branch.
+- Leaves the fallback `location_service` target buildable without QtPositioning
+  sources or link libraries when that flag is set.
+
+**Why it's needed:**
+The symbol atlas generator needs Qt Widgets/SVG/XML, but it does not use the
+desktop location service. CoMaps configures the full `libs/platform` tree before
+building `skin_generator_tool`, so a missing QtPositioning development package
+can otherwise block unrelated asset generation.
+
+**Without this patch:**
+- `generate_symbols.sh` can fail during CMake configure with
+  `Failed to find required Qt component "Positioning"`.
+- Valid symbol atlas generation would require installing an unnecessary
+  QtPositioning development package.
+
+
+### 0073-libs-map-transit-symbol-fallbacks.patch
+
+**File Modified:** `libs/map/transit/transit_display.cpp`
+
+**Category:** Runtime Rendering / Symbol Atlas Compatibility
+
+**Purpose:** Requests transit route symbols that exist in the current CoMaps
+icon atlas.
+
+**What it does:**
+- Maps transit route types whose `transit_*` icon names are absent from the
+  generated atlas to equivalent existing icons such as `tram`, `buses`,
+  `ship`, `cable-car`, `funicular`, and `airport`.
+- Keeps the existing atlas-backed names for subway, light rail, monorail, and
+  train.
+
+**Why it's needed:**
+The renderer requests all transit route symbol sizes during DrapeEngine
+initialization. Several upstream symbol names referenced by native transit code
+are not present in the current generated CoMaps icon pack, producing repeated
+`Detected using of unknown symbol` warnings on startup even when the symbol
+atlas was generated and loaded correctly.
+
+**Without this patch:**
+- Linux startup logs contain repeated unknown-symbol warnings for transit route
+  icons.
+- The logs make valid asset-loading problems harder to identify.
+
+
+### 0074-libs-base-localisation-constexpr-string.patch
+
+**File Modified:** `libs/base/localisation.hpp`
+
+**Category:** Windows Build Compatibility
+
+**Purpose:** Keeps `kReservedLanguageCode` constexpr-compatible on MSVC.
+
+**What it does:**
+- Replaces `static LanguageCode constexpr kReservedLanguageCode = "reserved";`
+  with a constexpr string literal array.
+- Preserves existing comparisons and `LanguageCode` construction because callers
+  can still compare or initialize `std::string` values from the literal.
+
+**Why it's needed:**
+`LanguageCode` is an alias for `std::string`. Visual Studio rejects that
+`constexpr` variable in debug builds while compiling CoMaps search, which breaks
+`flutter run -d windows`.
+
+**Without this patch:**
+- Windows debug builds can fail with
+  `libs/base/localisation.hpp(41,53): error C2131: expression did not evaluate
+  to a constant`.
+
+
+### 0075-libs-editor-feature-type-empty-result.patch
+
+**Files Modified:**
+- `libs/editor/feature_type_to_osm.hpp`
+- `libs/editor/feature_type_to_osm.cpp`
+
+**Category:** Windows Build Compatibility
+
+**Purpose:** Keeps the editor empty OSM tag result compatible with MSVC.
+
+**What it does:**
+- Replaces an invalid `static constexpr std::vector` member with a normal static
+  const declaration.
+- Adds the single out-of-class definition in `feature_type_to_osm.cpp`.
+
+**Why it's needed:**
+`std::vector` is not a constant-expression object for this MSVC build mode.
+Windows debug builds compile the editor target for the plugin and reject the
+header-only constexpr member.
+
+**Without this patch:**
+- Windows debug builds can fail with
+  `libs/editor/feature_type_to_osm.hpp(16,64): error C2131: expression did not
+  evaluate to a constant`.

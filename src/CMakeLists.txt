@@ -3,6 +3,9 @@ cmake_minimum_required(VERSION 3.22.1)
 # Force CMake Re-run 2
 project(agus_maps_flutter_library LANGUAGES C CXX)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/AgusMsvcParallel.cmake")
+agus_enable_msvc_parallel_builds()
+
 # Match CoMaps C++ standard
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +20,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 option(USE_PREBUILT_COMAPS "Use pre-built CoMaps libraries instead of building from source" OFF)
 set(PREBUILT_DIR "" CACHE PATH "Path to pre-built CoMaps libraries")
 set(COMAPS_HEADERS_DIR "" CACHE PATH "Path to downloaded CoMaps headers")
+set(AGUS_DUCKDB_ANDROID_DIR "" CACHE PATH "Path to ABI-specific DuckDB Android archive bundle")
 
 if(USE_PREBUILT_COMAPS)
   message(STATUS "=== Using pre-built CoMaps libraries ===")
@@ -77,8 +81,24 @@ if(NOT USE_PREBUILT_COMAPS)
   add_compile_definitions(OMIM_DISABLE_THREAD_CHECKER)
   message(STATUS "Thread checker disabled for embedded Flutter builds")
 
-  # Build CoMaps
+  if(ANDROID)
+    # Android links CoMaps static dependencies into the plugin shared library.
+    # ThinLTO can preserve TLS relocations from stb_image as __tls_get_addr,
+    # which is not resolvable for all Android ABIs in the NDK link.
+    string(APPEND CMAKE_C_FLAGS " -femulated-tls")
+    string(APPEND CMAKE_CXX_FLAGS " -femulated-tls")
+    string(APPEND CMAKE_SHARED_LINKER_FLAGS " -femulated-tls")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF CACHE BOOL "" FORCE)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO OFF CACHE BOOL "" FORCE)
+    message(STATUS "Disabled LTO and enabled emulated TLS for Android")
+  endif()
+
+  # Build CoMaps. CoMaps enables CMAKE_UNITY_BUILD in the shared CMake cache;
+  # turn it back off afterwards so generated Flutter plugin targets are not
+  # forced into unity builds.
   add_subdirectory("${COMAPS_SOURCE_DIR}" build/comaps)
+  set(CMAKE_UNITY_BUILD OFF CACHE BOOL "Use unity build" FORCE)
   
   # Restore install rules after CoMaps subdirectory
   set(CMAKE_SKIP_INSTALL_RULES OFF CACHE BOOL "" FORCE)
@@ -96,6 +116,7 @@ if(WIN32)
     "agus_platform_win.cpp"
     "agus_localization.cpp"
     "AgusWglContextFactory.cpp"
+    "agus_duckdb_bridge.cpp"
   )
 elseif(ANDROID)
   # Android uses EGL/GLES3 implementation
@@ -105,6 +126,7 @@ elseif(ANDROID)
     "agus_localization.cpp"
     "agus_ogl.cpp"
     "agus_gui_thread.cpp"
+    "agus_duckdb_bridge.cpp"
   )
 elseif(UNIX AND NOT APPLE)
   # Linux uses EGL/GLES3 for offscreen rendering with Flutter texture sharing
@@ -138,6 +160,28 @@ set_target_properties(agus_maps_flutter PROPERTIES
   # when our implementation files have namespace declarations that interact
   UNITY_BUILD OFF
 )
+
+if(ANDROID)
+  if(NOT AGUS_DUCKDB_ANDROID_DIR)
+    get_filename_component(AGUS_DUCKDB_ANDROID_DIR
+      "${CMAKE_CURRENT_SOURCE_DIR}/../build/agus-binaries-android-duckdb/${ANDROID_ABI}"
+      ABSOLUTE)
+  endif()
+
+  set(AGUS_DUCKDB_ANDROID_CMAKE
+    "${AGUS_DUCKDB_ANDROID_DIR}/agus_duckdb_android.cmake")
+  if(EXISTS "${AGUS_DUCKDB_ANDROID_CMAKE}")
+    include("${AGUS_DUCKDB_ANDROID_CMAKE}")
+    message(STATUS
+      "Using DuckDB Android archive bundle: ${AGUS_DUCKDB_ANDROID_DIR}")
+  else()
+    message(FATAL_ERROR
+      "DuckDB Android archive bundle not found for ${ANDROID_ABI}: "
+      "${AGUS_DUCKDB_ANDROID_DIR}. Run `dart run tool/build.dart "
+      "--build-binaries --platform android` before building Android from "
+      "source.")
+  endif()
+endif()
 
 # ============================================================================
 # Include Directories
@@ -205,6 +249,18 @@ else()
   endif()
 endif()
 
+if(ANDROID)
+  if(NOT AGUS_DUCKDB_ANDROID_INCLUDE_DIR OR NOT AGUS_DUCKDB_ANDROID_LIBRARIES)
+    message(FATAL_ERROR
+      "DuckDB Android archive bundle is missing include/library metadata: "
+      "${AGUS_DUCKDB_ANDROID_CMAKE}")
+  endif()
+
+  target_include_directories(agus_maps_flutter PRIVATE
+    "${AGUS_DUCKDB_ANDROID_INCLUDE_DIR}"
+  )
+endif()
+
 # ============================================================================
 # Link Libraries
 # ============================================================================
@@ -244,6 +300,32 @@ else()
     drape
     drape_frontend
   )
+endif()
+
+if(ANDROID)
+  if(NOT USE_PREBUILT_COMAPS)
+    # DuckDB spatial pulls json-c, which defines json_object_get and
+    # json_object_iter_next too. Load CoMaps' Jansson first so CoMaps JSON
+    # parsing cannot bind to json-c's incompatible ABI.
+    target_link_libraries(agus_maps_flutter
+      PRIVATE
+      -Wl,--whole-archive
+      jansson
+      -Wl,--no-whole-archive
+    )
+  endif()
+
+  target_link_libraries(agus_maps_flutter
+    PRIVATE
+    -Wl,--start-group
+    ${AGUS_DUCKDB_ANDROID_LIBRARIES}
+    -Wl,--end-group
+    -ldl
+    -lm
+  )
+  if(ANDROID_ABI STREQUAL "armeabi-v7a")
+    target_link_libraries(agus_maps_flutter PRIVATE -latomic)
+  endif()
 endif()
 
 target_compile_definitions(agus_maps_flutter PUBLIC DART_SHARED_LIB)
@@ -335,6 +417,40 @@ if(WIN32)
     dbghelp   # For MiniDumpWriteDump crash handler
     shell32   # For SHGetFolderPath
   )
+
+  set(AGUS_DUCKDB_WINDOWS_DIR "" CACHE PATH "Path to Windows DuckDB runtime bundle")
+  if(NOT AGUS_DUCKDB_WINDOWS_DIR)
+    get_filename_component(AGUS_DUCKDB_WINDOWS_DIR
+      "${CMAKE_CURRENT_SOURCE_DIR}/../build/agus-binaries-windows-duckdb/x64"
+      ABSOLUTE)
+  endif()
+
+  set(AGUS_DUCKDB_WINDOWS_INCLUDE_DIR "${AGUS_DUCKDB_WINDOWS_DIR}/include")
+  set(AGUS_DUCKDB_WINDOWS_IMPLIB "${AGUS_DUCKDB_WINDOWS_DIR}/duckdb.lib")
+  set(AGUS_DUCKDB_WINDOWS_DLL "${AGUS_DUCKDB_WINDOWS_DIR}/duckdb.dll")
+
+  if(NOT EXISTS "${AGUS_DUCKDB_WINDOWS_INCLUDE_DIR}/duckdb.h")
+    message(FATAL_ERROR
+      "DuckDB Windows headers not found: ${AGUS_DUCKDB_WINDOWS_INCLUDE_DIR}. "
+      "Run `dart run tool/build.dart --build-binaries --platform windows` "
+      "before building Windows from source.")
+  endif()
+  if(NOT EXISTS "${AGUS_DUCKDB_WINDOWS_IMPLIB}")
+    message(FATAL_ERROR
+      "DuckDB Windows import library not found: ${AGUS_DUCKDB_WINDOWS_IMPLIB}. "
+      "Run `dart run tool/build.dart --build-binaries --platform windows` "
+      "before building Windows from source.")
+  endif()
+
+  add_library(agus_duckdb_windows SHARED IMPORTED)
+  set_target_properties(agus_duckdb_windows PROPERTIES
+    IMPORTED_IMPLIB "${AGUS_DUCKDB_WINDOWS_IMPLIB}"
+    IMPORTED_LOCATION "${AGUS_DUCKDB_WINDOWS_DLL}"
+  )
+  target_include_directories(agus_maps_flutter PRIVATE
+    "${AGUS_DUCKDB_WINDOWS_INCLUDE_DIR}"
+  )
+  target_link_libraries(agus_maps_flutter PRIVATE agus_duckdb_windows)
   
   # MSVC-specific flags
   if(MSVC)

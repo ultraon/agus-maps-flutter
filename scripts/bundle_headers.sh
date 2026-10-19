@@ -137,16 +137,27 @@ bundle_comaps_headers() {
 bundle_3party_headers() {
     log_info "Bundling third-party headers..."
     
-    # Boost (header-only library - copy the entire boost directory)
+    # Boost (header-only library - copy either generated or modular headers)
     if [[ -d "$COMAPS_DIR/3party/boost/boost" ]]; then
         log_info "  Copying Boost headers (this may take a moment)..."
         copy_headers "$COMAPS_DIR/3party/boost/boost" "comaps/3party/boost/boost"
+    elif [[ -d "$COMAPS_DIR/3party/boost/libs" ]]; then
+        log_info "  Copying modular Boost headers (this may take a moment)..."
+        local boost_include_count=0
+        while IFS= read -r include_dir; do
+            copy_headers "$include_dir" "comaps/3party/boost"
+            boost_include_count=$((boost_include_count + 1))
+        done < <(find "$COMAPS_DIR/3party/boost/libs" -path "*/include" -type d | sort)
+        log_info "  Copied $boost_include_count modular Boost include directories"
     else
-        log_warn "  Boost headers not found - run 'cd thirdparty/comaps/3party/boost && ./bootstrap.sh && ./b2 headers' first"
+        log_warn "  Boost headers not found - expected generated boost/ or modular libs/*/include layout"
     fi
     
     # GLM (header-only math library)
     copy_headers "$COMAPS_DIR/3party/glm/glm" "comaps/3party/glm/glm"
+    
+    # ankerl::unordered_dense (header-only hash maps used by CoMaps base logging)
+    copy_headers "$COMAPS_DIR/3party/ankerl" "comaps/3party/ankerl"
     
     # utfcpp (header-only UTF conversion)
     copy_headers "$COMAPS_DIR/3party/utfcpp/source" "comaps/3party/utfcpp/source"
@@ -205,6 +216,28 @@ bundle_3party_headers() {
     done
 }
 
+# Validate headers that are known to be referenced by public CoMaps headers.
+validate_header_bundle() {
+    log_info "Validating required bundled headers..."
+
+    local required_headers=(
+        "comaps/libs/base/internal/message.hpp"
+        "comaps/3party/ankerl/unordered_dense.h"
+    )
+
+    local missing=0
+    for header in "${required_headers[@]}"; do
+        if [[ ! -f "$STAGING_DIR/$header" ]]; then
+            log_error "Required header missing from bundle: $header"
+            missing=1
+        fi
+    done
+
+    if [[ "$missing" -ne 0 ]]; then
+        exit 1
+    fi
+}
+
 # Create the tarball
 create_tarball() {
     log_info "Creating tarball..."
@@ -244,6 +277,7 @@ main() {
     copy_toplevel_files
     bundle_comaps_headers
     bundle_3party_headers
+    validate_header_bundle
     show_stats
     create_tarball
     

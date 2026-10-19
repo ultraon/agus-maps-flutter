@@ -14,27 +14,40 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <cerrno>
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <memory>
 #include <mutex>
+#include <set>
+#include <string>
+#include <utility>
 #include <boost/regex.hpp>
 
 #include "base/file_name_utils.hpp"
 #include "base/logging.hpp"
 #include "base/exception.hpp"
+#include "base/localisation.hpp"
 #include "map/framework.hpp"
 #include "map/place_page_info.hpp"
+#include "indexer/map_style.hpp"
+#include "indexer/map_style_reader.hpp"
 #include "platform/local_country_file.hpp"
 #include "platform/platform.hpp"
 #include "platform/constants.hpp"
 #include "coding/file_reader.hpp"
 #include "drape/graphics_context_factory.hpp"
+#include "drape/color.hpp"
 #include "drape_frontend/visual_params.hpp"
 #include "drape_frontend/user_event_stream.hpp"
 #include "drape_frontend/drape_engine.hpp"
 #include "drape_frontend/active_frame_callback.hpp"
+#include "drape_frontend/drape_api.hpp"
 #include "geometry/mercator.hpp"
 #include "indexer/feature_meta.hpp"
 #include "geometry/screenbase.hpp"
+#include "agus_navigation_bridge.hpp"
+#include "agus_search_bridge.hpp"
 #include <sstream>
 #include <iomanip>
 #include <string_view>
@@ -71,6 +84,272 @@ static bool g_drapeEngineCreated = false;
 static bool g_loggingInitialized = false;
 static std::mutex g_mutex;
 static std::mutex g_placePageMutex;
+static std::mutex g_mapPointerMutex;
+static std::mutex g_viewportMutex;
+static double g_currentBearingDegrees = 0.0;
+static std::unique_ptr<ScreenBase> g_currentScreen;
+static bool g_3dBuildingsEnabled = false;
+static bool g_outdoorsEnabled = false;
+static bool g_isolinesEnabled = false;
+static bool g_subwayEnabled = false;
+
+struct AgusMapPointerState {
+    double physicalX = 0.0;
+    double physicalY = 0.0;
+    double lat = 0.0;
+    double lon = 0.0;
+    bool insideMap = false;
+    bool hasCoordinate = false;
+};
+
+static AgusMapPointerState g_lastMapPointer;
+
+namespace
+{
+double constexpr kDegreesPerRadian = 180.0 / 3.14159265358979323846;
+double constexpr kRadiansPerDegree = 3.14159265358979323846 / 180.0;
+std::set<std::string> g_duckDBInteractionDrapeLineIds;
+
+struct DuckDBInteractionLineStyle {
+    dp::Color color = dp::Color(37, 99, 235, 235);
+    float width = 2.0f;
+    bool dashed = false;
+    double dashLength = 12.0;
+    double gapLength = 7.0;
+};
+
+double NormalizeBearingDegrees(double degrees) {
+    double normalized = std::fmod(degrees, 360.0);
+    if (normalized < 0.0) {
+        normalized += 360.0;
+    }
+    return normalized >= 359.999 ? 0.0 : normalized;
+}
+
+bool IsOutdoorsStyle(MapStyle style) {
+    return style == MapStyleOutdoorsLight || style == MapStyleOutdoorsDark;
+}
+
+void ApplyRuntimeMapStyle(MapStyle mapStyle) {
+    if (!g_framework || mapStyle == MapStyleMerged) {
+        return;
+    }
+    GetStyleReader().SetCurrentStyle(mapStyle);
+    if (auto engine = g_framework->GetDrapeEngine()) {
+        engine->UpdateMapStyle();
+    }
+}
+
+void WakeRenderer() {
+    if (!g_framework) {
+        return;
+    }
+    g_framework->InvalidateRendering();
+    g_framework->InvalidateRect(g_framework->GetCurrentViewport());
+    if (g_drapeEngineCreated) {
+        g_framework->MakeFrameActive();
+    }
+}
+
+void SetViewportTracking() {
+    if (!g_framework) {
+        return;
+    }
+    g_framework->SetViewportListener([](ScreenBase const & screen) {
+        g_currentBearingDegrees = NormalizeBearingDegrees(
+            screen.GetAngle() * kDegreesPerRadian);
+        std::lock_guard<std::mutex> lock(g_viewportMutex);
+        g_currentScreen = std::make_unique<ScreenBase>(screen);
+    });
+}
+
+std::vector<m2::PointD> ParseWktMercatorPoints(char const * wkt) {
+    std::vector<m2::PointD> points;
+    if (wkt == nullptr) {
+        return points;
+    }
+
+    char const * cursor = wkt;
+    while (*cursor != '\0') {
+        char * numberEnd = nullptr;
+        double const lon = std::strtod(cursor, &numberEnd);
+        if (numberEnd == cursor) {
+            ++cursor;
+            continue;
+        }
+        cursor = numberEnd;
+
+        double const lat = std::strtod(cursor, &numberEnd);
+        if (numberEnd == cursor) {
+            break;
+        }
+        cursor = numberEnd;
+        points.push_back(mercator::FromLatLon(lat, lon));
+    }
+    return points;
+}
+
+std::vector<std::vector<m2::PointD>> ParseWktMercatorGeometries(char const * wkt) {
+    std::vector<std::vector<m2::PointD>> geometries;
+    if (wkt == nullptr) {
+        return geometries;
+    }
+
+    std::string_view const text(wkt);
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = text.find('\n', start);
+        if (end == std::string_view::npos) {
+            end = text.size();
+        }
+        auto const chunk = text.substr(start, end - start);
+        if (!chunk.empty()) {
+            std::string geometry(chunk);
+            auto points = ParseWktMercatorPoints(geometry.c_str());
+            if (!points.empty()) {
+                geometries.push_back(std::move(points));
+            }
+        }
+        start = end + 1;
+    }
+    return geometries;
+}
+
+std::vector<std::vector<m2::PointD>> BuildInteractionLineGeometries(
+    std::vector<m2::PointD> const & points,
+    DuckDBInteractionLineStyle const & style) {
+    if (points.size() < 2) {
+        return {};
+    }
+    if (!style.dashed) {
+        return {points};
+    }
+
+    ScreenBase screen;
+    {
+        std::lock_guard<std::mutex> lock(g_viewportMutex);
+        if (!g_currentScreen) {
+            return {points};
+        }
+        screen = *g_currentScreen;
+    }
+
+    double const dashLength = std::max(1.0, style.dashLength);
+    double const gapLength = std::max(1.0, style.gapLength);
+    double const cycleLength = dashLength + gapLength;
+    std::vector<std::vector<m2::PointD>> dashes;
+    for (size_t segmentIndex = 1; segmentIndex < points.size(); ++segmentIndex) {
+        auto const & start = points[segmentIndex - 1];
+        auto const & end = points[segmentIndex];
+        auto const startPx = screen.GtoP(start);
+        auto const endPx = screen.GtoP(end);
+        double const lengthPx = std::hypot(endPx.x - startPx.x, endPx.y - startPx.y);
+        if (lengthPx <= 0.0) {
+            continue;
+        }
+        for (double offsetPx = 0.0; offsetPx < lengthPx; offsetPx += cycleLength) {
+            double const dashEndPx = std::min(lengthPx, offsetPx + dashLength);
+            if (dashEndPx <= offsetPx) {
+                continue;
+            }
+            double const startT = offsetPx / lengthPx;
+            double const endT = dashEndPx / lengthPx;
+            dashes.push_back({
+                m2::PointD(
+                    start.x + ((end.x - start.x) * startT),
+                    start.y + ((end.y - start.y) * startT)),
+                m2::PointD(
+                    start.x + ((end.x - start.x) * endT),
+                    start.y + ((end.y - start.y) * endT)),
+            });
+        }
+    }
+    return dashes.empty() ? std::vector<std::vector<m2::PointD>>{points} : dashes;
+}
+
+void UpdateDuckDBDrapeApiLines(
+    std::set<std::string> & activeIds,
+    std::vector<std::vector<m2::PointD>> const & lineGeometries,
+    std::string const & idPrefix,
+    DuckDBInteractionLineStyle const & style) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+
+    std::set<std::string> nextIds;
+    size_t lineIndex = 0;
+    for (auto const & points : lineGeometries) {
+        auto const renderGeometries = BuildInteractionLineGeometries(points, style);
+        size_t segmentIndex = 0;
+        for (auto const & renderPoints : renderGeometries) {
+            if (renderPoints.size() < 2) {
+                continue;
+            }
+            auto const id = idPrefix + "-" + std::to_string(lineIndex) +
+                "-" + std::to_string(segmentIndex++);
+            nextIds.insert(id);
+            g_framework->GetDrapeApi().AddLine(
+                id,
+                df::DrapeApiLineData(renderPoints, style.color).Width(style.width));
+        }
+        ++lineIndex;
+    }
+
+    for (auto const & oldId : activeIds) {
+        if (nextIds.count(oldId) == 0) {
+            g_framework->GetDrapeApi().RemoveLine(oldId);
+        }
+    }
+    activeIds = std::move(nextIds);
+}
+
+void ClearDuckDBDrapeApiLines(std::set<std::string> & activeIds) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        activeIds.clear();
+        return;
+    }
+    for (auto const & id : activeIds) {
+        g_framework->GetDrapeApi().RemoveLine(id);
+    }
+    activeIds.clear();
+}
+
+void SetOutdoorsEnabledInternal(bool enabled) {
+    if (!g_framework) {
+        return;
+    }
+
+    g_outdoorsEnabled = enabled;
+    auto const currentStyle = g_framework->GetMapStyle();
+    bool const dark = MapStyleIsDark(currentStyle);
+
+    if (enabled) {
+        ApplyRuntimeMapStyle(dark ? MapStyleOutdoorsDark : MapStyleOutdoorsLight);
+    } else if (IsOutdoorsStyle(currentStyle)) {
+        ApplyRuntimeMapStyle(dark ? MapStyleDefaultDark : MapStyleDefaultLight);
+    }
+}
+
+void SetIsolinesEnabledInternal(bool enabled) {
+    if (!g_framework) {
+        return;
+    }
+    g_isolinesEnabled = enabled;
+    g_framework->GetIsolinesManager().SetEnabled(enabled);
+}
+
+void SetSubwayEnabledInternal(bool enabled) {
+    if (!g_framework) {
+        return;
+    }
+    if (enabled) {
+        SetOutdoorsEnabledInternal(false);
+        SetIsolinesEnabledInternal(false);
+    }
+    g_subwayEnabled = enabled;
+    g_framework->GetTransitManager().EnableTransitSchemeMode(enabled);
+}
+}  // namespace
 
 static char* CopyString(std::string const & value) {
     size_t const size = value.size();
@@ -450,6 +729,7 @@ FFI_PLUGIN_EXPORT void comaps_init_paths(const char* resourcePath, const char* w
     Platform & pl = GetPlatform();
     pl.SetWritableDirForTests(writablePath);
     pl.SetResourceDir(resourcePath);
+    pl.SetSettingsDir(writablePath);
     
     g_platformInitialized = true;
     
@@ -462,6 +742,7 @@ FFI_PLUGIN_EXPORT void comaps_init_paths(const char* resourcePath, const char* w
         params.m_numSearchAPIThreads = 1;
         
         g_framework = std::make_unique<Framework>(params, false /* loadMaps */);
+        SetViewportTracking();
         g_framework->RegisterAllMaps();
         
         std::fprintf(stderr, "[AgusMapsFlutter] Framework created and maps registered\n");
@@ -501,6 +782,469 @@ FFI_PLUGIN_EXPORT void comaps_set_view(double lat, double lon, int zoom) {
     }
 }
 
+FFI_PLUGIN_EXPORT int comaps_get_viewport_center(double* lat, double* lon) {
+    if (!g_framework || !lat || !lon) {
+        return 0;
+    }
+    auto const ll = mercator::ToLatLon(g_framework->GetViewportCenter());
+    *lat = ll.m_lat;
+    *lon = ll.m_lon;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void) {
+    if (!g_framework) {
+        return -1;
+    }
+    return g_framework->GetDrawScale();
+}
+
+FFI_PLUGIN_EXPORT int comaps_screen_to_latlon(
+    double physical_x,
+    double physical_y,
+    double* lat,
+    double* lon) {
+    if (!g_framework || !lat || !lon) {
+        return 0;
+    }
+
+    auto const mercatorPoint = g_framework->PtoG(
+        m2::PointD(physical_x, physical_y));
+    auto const coordinate = mercator::ToLatLon(mercatorPoint);
+    *lat = coordinate.m_lat;
+    *lon = coordinate.m_lon;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT int comaps_update_map_pointer(
+    double physical_x,
+    double physical_y,
+    int inside_map,
+    double* lat,
+    double* lon) {
+    if (!lat || !lon) {
+        return 0;
+    }
+
+    bool hasCoordinate = false;
+    double projectedLat = 0.0;
+    double projectedLon = 0.0;
+    if (g_framework && inside_map != 0) {
+        auto const mercatorPoint = g_framework->PtoG(
+            m2::PointD(physical_x, physical_y));
+        auto const coordinate = mercator::ToLatLon(mercatorPoint);
+        projectedLat = coordinate.m_lat;
+        projectedLon = coordinate.m_lon;
+        hasCoordinate = true;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_mapPointerMutex);
+        g_lastMapPointer.physicalX = physical_x;
+        g_lastMapPointer.physicalY = physical_y;
+        g_lastMapPointer.lat = projectedLat;
+        g_lastMapPointer.lon = projectedLon;
+        g_lastMapPointer.insideMap = inside_map != 0;
+        g_lastMapPointer.hasCoordinate = hasCoordinate;
+    }
+
+    if (!hasCoordinate) {
+        return 0;
+    }
+    *lat = projectedLat;
+    *lon = projectedLon;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT int comaps_latlon_to_screen(
+    double lat,
+    double lon,
+    double* physical_x,
+    double* physical_y) {
+    if (!g_framework || !physical_x || !physical_y) {
+        return 0;
+    }
+
+    auto const screenPoint = g_framework->GtoP(mercator::FromLatLon(lat, lon));
+    *physical_x = screenPoint.x;
+    *physical_y = screenPoint.y;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT const char* agus_duckdb_library_version(void) { return ""; }
+
+FFI_PLUGIN_EXPORT const char* agus_duckdb_last_error(void) {
+    return "DuckDB bridge is not wired on Linux yet.";
+}
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_open_app_database(const char* /* writablePath */) { return 0; }
+
+FFI_PLUGIN_EXPORT void agus_duckdb_close(void) {}
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_is_open(void) { return 0; }
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_load_required_extensions(void) { return 0; }
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_execute(const char* /* sql */) { return 0; }
+
+FFI_PLUGIN_EXPORT const char* agus_duckdb_query_json(const char* /* sql */) { return nullptr; }
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_validate_render_query(const char* /* sql */) { return 0; }
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_copy_render_features(
+    double /* min_lon */,
+    double /* min_lat */,
+    double /* max_lon */,
+    double /* max_lat */,
+    int32_t /* zoom */,
+    AgusDuckDBRenderFeature** out_features,
+    int32_t* out_count) {
+    if (out_features) *out_features = nullptr;
+    if (out_count) *out_count = 0;
+    return 0;
+}
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_copy_render_features_page(
+    double /* min_lon */,
+    double /* min_lat */,
+    double /* max_lon */,
+    double /* max_lat */,
+    int32_t /* zoom */,
+    int32_t /* limit */,
+    int32_t /* offset */,
+    AgusDuckDBRenderFeature** out_features,
+    int32_t* out_count) {
+    if (out_features) *out_features = nullptr;
+    if (out_count) *out_count = 0;
+    return 0;
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_free_render_features(
+    AgusDuckDBRenderFeature* /* features */,
+    int32_t /* count */) {}
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_refresh_render_layers(void) { return -1; }
+
+FFI_PLUGIN_EXPORT void agus_duckdb_set_edit_handles_from_wkt(const char* geometryWkt) {
+    std::vector<std::vector<m2::PointD>> geometries = ParseWktMercatorGeometries(geometryWkt);
+    DuckDBInteractionLineStyle style;
+    style.color = dp::Color(245, 158, 11, 242);
+    style.dashed = false;
+    UpdateDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds, geometries, "duckdb-interaction", style);
+    std::fprintf(stderr,
+                 "[AgusMapsFlutter] DuckDB interaction geometry: mode=2 geometries=%zu renderer=DrapeApiLineData depthTest=0 lineWidth=%.2f dashed=0 platform=linux\n",
+                 geometries.size(),
+                 style.width);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_set_interaction_geometry_from_wkt(
+    int32_t interactionMode,
+    const char* geometryWkt) {
+    if (interactionMode == 0 || geometryWkt == nullptr || *geometryWkt == '\0') {
+        ClearDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds);
+        WakeRenderer();
+        return;
+    }
+    DuckDBInteractionLineStyle style;
+    style.dashed = interactionMode == 1;
+    if (interactionMode == 2) {
+        style.color = dp::Color(245, 158, 11, 242);
+        style.dashed = false;
+    }
+    auto geometries = ParseWktMercatorGeometries(geometryWkt);
+    UpdateDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds, geometries, "duckdb-interaction", style);
+    std::fprintf(stderr,
+                 "[AgusMapsFlutter] DuckDB interaction geometry: mode=%d geometries=%zu renderer=DrapeApiLineData depthTest=0 lineWidth=%.2f dashed=%d platform=linux\n",
+                 interactionMode,
+                 geometries.size(),
+                 style.width,
+                 style.dashed ? 1 : 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_update_interaction_geometry(
+    int32_t interactionMode,
+    const char* geometryWkt,
+    int32_t red,
+    int32_t green,
+    int32_t blue,
+    double opacity,
+    double width,
+    int32_t dashed,
+    double dashLength,
+    double gapLength) {
+    if (interactionMode == 0 || geometryWkt == nullptr || *geometryWkt == '\0') {
+        ClearDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds);
+        WakeRenderer();
+        return;
+    }
+    DuckDBInteractionLineStyle style;
+    int const clampedRed = std::max(0, std::min(red, 255));
+    int const clampedGreen = std::max(0, std::min(green, 255));
+    int const clampedBlue = std::max(0, std::min(blue, 255));
+    int const alpha = std::max(0, std::min(static_cast<int>(opacity * 255.0), 255));
+    style.color = dp::Color(clampedRed, clampedGreen, clampedBlue, alpha);
+    style.width = static_cast<float>(std::max(0.5, std::min(width, 8.0)));
+    style.dashed = dashed != 0;
+    style.dashLength = std::max(1.0, dashLength);
+    style.gapLength = std::max(1.0, gapLength);
+    auto geometries = ParseWktMercatorGeometries(geometryWkt);
+    UpdateDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds, geometries, "duckdb-interaction", style);
+    std::fprintf(stderr,
+                 "[AgusMapsFlutter] DuckDB interaction geometry: mode=%d geometries=%zu renderer=DrapeApiLineData depthTest=0 lineWidth=%.2f opacity=%d dashed=%d platform=linux\n",
+                 interactionMode,
+                 geometries.size(),
+                 style.width,
+                 alpha,
+                 style.dashed ? 1 : 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_clear_edit_handles(void) {
+    ClearDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_set_rendering_enabled(int32_t /* enabled */) {}
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_apply_migration_file(const char* /* path */) { return 0; }
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_run_migrations(void) { return 0; }
+
+FFI_PLUGIN_EXPORT void comaps_zoom_in(int animated) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_framework->Scale(Framework::SCALE_MAG_LIGHT, animated != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_zoom_out(int animated) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_framework->Scale(Framework::SCALE_MIN_LIGHT, animated != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT double comaps_get_current_bearing(void) {
+    return g_currentBearingDegrees;
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_bearing(double degrees, int animated) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_currentBearingDegrees = NormalizeBearingDegrees(degrees);
+    g_framework->Rotate(g_currentBearingDegrees * kRadiansPerDegree, animated != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_reset_bearing(int animated) {
+    comaps_set_bearing(0.0, animated);
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_3d_buildings_enabled(int enabled) {
+    g_3dBuildingsEnabled = enabled != 0;
+    if (!g_framework) {
+        return;
+    }
+    g_framework->Allow3dMode(false, g_3dBuildingsEnabled);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_3d_buildings_enabled(void) {
+    return g_3dBuildingsEnabled ? 1 : 0;
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_map_theme(int dark) {
+    if (!g_framework) {
+        return;
+    }
+    auto const currentStyle = g_framework->GetMapStyle();
+    ApplyRuntimeMapStyle(dark != 0
+        ? GetDarkMapStyleVariant(currentStyle)
+        : GetLightMapStyleVariant(currentStyle));
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_map_theme_is_dark(void) {
+    if (!g_framework) {
+        return 0;
+    }
+    return MapStyleIsDark(g_framework->GetMapStyle()) ? 1 : 0;
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_outdoors_enabled(int enabled) {
+    if (!g_framework) {
+        return;
+    }
+    if (enabled) {
+        SetSubwayEnabledInternal(false);
+    }
+    SetOutdoorsEnabledInternal(enabled != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_isolines_enabled(int enabled) {
+    if (!g_framework) {
+        return;
+    }
+    if (enabled) {
+        SetSubwayEnabledInternal(false);
+    }
+    SetIsolinesEnabledInternal(enabled != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_subway_enabled(int enabled) {
+    SetSubwayEnabledInternal(enabled != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_get_map_layer_state(int* outdoors, int* isolines, int* subway) {
+    if (outdoors) {
+        *outdoors = g_outdoorsEnabled ? 1 : 0;
+    }
+    if (isolines) {
+        *isolines = g_isolinesEnabled ? 1 : 0;
+    }
+    if (subway) {
+        *subway = g_subwayEnabled ? 1 : 0;
+    }
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_map_language(const char* languageCode) {
+    if (!g_framework) {
+        return;
+    }
+    auto engine = g_framework->GetDrapeEngine();
+    if (!engine) {
+        return;
+    }
+    auto languageIndex = localisation::GetMapLanguageIndex();
+    if (languageCode && *languageCode) {
+        auto const requestedIndex =
+            localisation::ConvertLanguageCodeToLanguageIndex(languageCode);
+        if (requestedIndex != localisation::kUnsupportedLanguageIndex) {
+            languageIndex = requestedIndex;
+        }
+    }
+    engine->SetMapLangIndex(languageIndex);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_set_router(int32_t routerType) {
+    auto const result = agus::navigation::SetRouter(g_framework.get(), routerType);
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_router(void) {
+    return agus::navigation::GetRouter(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_add_route_point(
+    int32_t markType, const char* title, const char* subtitle, double lat,
+    double lon, int32_t intermediateIndex, int32_t isMyPosition,
+    int32_t reorderIntermediatePoints) {
+    auto const result = agus::navigation::AddRoutePoint(
+        g_framework.get(), markType, title, subtitle, lat, lon,
+        intermediateIndex, isMyPosition, reorderIntermediatePoints);
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_remove_route_point(
+    int32_t markType, int32_t intermediateIndex) {
+    agus::navigation::RemoveRoutePoint(g_framework.get(), markType, intermediateIndex);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_clear_route_points(void) {
+    agus::navigation::ClearRoutePoints(g_framework.get());
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_build_route(void) {
+    auto const result = agus::navigation::BuildRoute(g_framework.get());
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route(void) {
+    auto const result = agus::navigation::FollowRoute(g_framework.get());
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints) {
+    agus::navigation::CloseRoute(g_framework.get(), removeRoutePoints);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_active(void) {
+    return agus::navigation::IsActive(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_built(void) {
+    return agus::navigation::IsBuilt(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_building(void) {
+    return agus::navigation::IsBuilding(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_following(void) {
+    return agus::navigation::IsFollowing(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT AgusNavigationStatus* comaps_navigation_copy_status(void) {
+    return agus::navigation::CopyStatus(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_status_free(AgusNavigationStatus* status) {
+    agus::navigation::FreeStatus(status);
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_measurement_units(int32_t units) {
+    agus::navigation::SetMeasurementUnits(g_framework.get(), units);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_measurement_units(void) {
+    return agus::navigation::GetMeasurementUnits();
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_turn_notifications_enabled(int32_t enabled) {
+    agus::navigation::SetTurnNotificationsEnabled(g_framework.get(), enabled);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_turn_notifications_enabled(void) {
+    return agus::navigation::GetTurnNotificationsEnabled(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_turn_notifications_locale(const char* locale) {
+    agus::navigation::SetTurnNotificationsLocale(g_framework.get(), locale);
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_speed_camera_mode(int32_t mode) {
+    agus::navigation::SetSpeedCameraMode(g_framework.get(), mode);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_speed_camera_mode(void) {
+    return agus::navigation::GetSpeedCameraMode(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_avoid_routing_options(int32_t mask) {
+    agus::navigation::SetAvoidRoutingOptions(mask);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_avoid_routing_options(void) {
+    return agus::navigation::GetAvoidRoutingOptions();
+}
+
 FFI_PLUGIN_EXPORT void comaps_invalidate(void) {
     if (g_framework) {
         g_framework->InvalidateRect(g_framework->GetCurrentViewport());
@@ -510,7 +1254,7 @@ FFI_PLUGIN_EXPORT void comaps_invalidate(void) {
 FFI_PLUGIN_EXPORT void comaps_force_redraw(void) {
     if (g_framework) {
         // Force complete tile reload
-        g_framework->SetMapStyle(g_framework->GetMapStyle());
+        ApplyRuntimeMapStyle(g_framework->GetMapStyle());
         g_framework->MakeFrameActive();
         g_framework->InvalidateRendering();
     }
@@ -623,6 +1367,31 @@ FFI_PLUGIN_EXPORT void comaps_place_page_clear_selection(void) {
         return;
     }
     g_framework->DeactivateMapSelection();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_search_start(const char* query, const char* locale,
+                                              int32_t interactive, int32_t isCategory) {
+    return agus_search_bridge::StartSearch(g_framework.get(), query, locale, interactive, isCategory);
+}
+
+FFI_PLUGIN_EXPORT AgusSearchResults* comaps_search_copy_results(void) {
+    return agus_search_bridge::CopyResults();
+}
+
+FFI_PLUGIN_EXPORT void comaps_search_results_free(AgusSearchResults* data) {
+    agus_search_bridge::FreeResults(data);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_search_show_result(int32_t index) {
+    int32_t const status = agus_search_bridge::ShowResult(g_framework.get(), index);
+    if (status > 0) {
+        WakeRenderer();
+    }
+    return status;
+}
+
+FFI_PLUGIN_EXPORT void comaps_search_cancel(void) {
+    agus_search_bridge::Cancel(g_framework.get());
 }
 
 FFI_PLUGIN_EXPORT int comaps_register_single_map(const char* fullPath) {
@@ -784,6 +1553,7 @@ FFI_PLUGIN_EXPORT int64_t agus_native_create_surface(int32_t width, int32_t heig
         params.m_numSearchAPIThreads = 1;
         
         g_framework = std::make_unique<Framework>(params, false /* loadMaps */);
+        SetViewportTracking();
         g_framework->RegisterAllMaps();
         std::fprintf(stderr, "[AgusMapsFlutter] Framework created\n");
     }
@@ -922,6 +1692,20 @@ FFI_PLUGIN_EXPORT int agus_copy_pixels(uint8_t* buffer, int32_t bufferSize) {
         return g_eglFactory->CopyToPixelBuffer(buffer, bufferSize) ? 1 : 0;
     }
     return 0;
+}
+
+FFI_PLUGIN_EXPORT void* agus_get_shared_texture_handle(void) { return nullptr; }
+
+FFI_PLUGIN_EXPORT void* agus_get_d3d11_device(void) { return nullptr; }
+
+FFI_PLUGIN_EXPORT void* agus_get_d3d11_texture(void) { return nullptr; }
+
+FFI_PLUGIN_EXPORT void agus_render_frame(void) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_framework->InvalidateRendering();
+    g_framework->MakeFrameActive();
 }
 
 } // extern "C" - end Linux Surface Management functions

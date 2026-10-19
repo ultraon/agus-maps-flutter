@@ -10,10 +10,12 @@
 	<string></string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Agus Suite</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>$(PRODUCT_NAME)</string>
+	<string>Agus Suite</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -26,6 +28,10 @@
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSMainNibFile</key>
 	<string>MainMenu</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Show your current position on the map.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Allow Agus Maps to estimate your position and center the map.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

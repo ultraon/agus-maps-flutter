@@ -9,6 +9,7 @@
 /// Used by both:
 /// - Runtime library (`lib/mirror_service.dart`) for Flutter apps
 /// - Build tools (`tool/map_downloader.dart`, `tool/check_mirrors.dart`)
+library;
 
 import 'dart:convert';
 import 'dart:io';
@@ -21,18 +22,67 @@ const String comapsMetaserverUrl = 'https://cdn-us-1.comaps.app/servers';
 /// URL structure: `<base>/maps/<version>/<file>`
 const List<MirrorConfig> defaultMirrors = [
   MirrorConfig(
-    name: 'CoMaps MapGen Finland',
-    baseUrl: 'https://mapgen-fi-1.comaps.app/',
+    name: 'CoMaps CDN Germany',
+    baseUrl: 'https://comaps.firewall-gateway.de/',
   ),
   MirrorConfig(
     name: 'CoMaps CDN US',
     baseUrl: 'https://cdn-us-2.comaps.tech/',
   ),
   MirrorConfig(
-    name: 'CoMaps CDN Germany',
-    baseUrl: 'https://comaps.firewall-gateway.de/',
+    name: 'CoMaps CDN Finland',
+    baseUrl: 'https://cdn-fi-1.comaps.app/',
+  ),
+  MirrorConfig(
+    name: 'CoMaps CDN France',
+    baseUrl: 'https://comaps.openstreetmap.fr/',
+  ),
+  MirrorConfig(
+    name: 'CoMaps CDN Italy',
+    baseUrl: 'https://comaps-it1.unfoxo.it/',
+  ),
+  MirrorConfig(
+    name: 'CoMaps CDN Cloud.ru',
+    baseUrl: 'https://comaps-cdn.s3-website.cloud.ru/',
+  ),
+  MirrorConfig(
+    name: 'CoMaps MapGen Finland',
+    baseUrl: 'https://mapgen-fi-1.comaps.app/',
   ),
 ];
+
+String normalizeMirrorUrl(String url) {
+  final trimmed = url.trim();
+  return trimmed.endsWith('/') ? trimmed : '$trimmed/';
+}
+
+bool mirrorUrlsMatch(String left, String right) {
+  return normalizeMirrorUrl(left) == normalizeMirrorUrl(right);
+}
+
+List<MirrorConfig> mergeMetaserverMirrors(
+  Iterable<MirrorConfig> baseMirrors,
+  Iterable<String> metaserverUrls,
+) {
+  final merged = List<MirrorConfig>.from(baseMirrors);
+
+  for (final url in metaserverUrls) {
+    final normalizedUrl = normalizeMirrorUrl(url);
+    final alreadyExists = merged.any(
+      (mirror) => mirrorUrlsMatch(mirror.baseUrl, normalizedUrl),
+    );
+    if (alreadyExists) continue;
+
+    merged.add(
+      MirrorConfig(
+        name: 'CoMaps (from metaserver)',
+        baseUrl: normalizedUrl,
+      ),
+    );
+  }
+
+  return merged;
+}
 
 /// Mirror server configuration
 class MirrorConfig {
@@ -45,9 +95,9 @@ class MirrorConfig {
   });
 
   Map<String, dynamic> toJson() => {
-    'name': name,
-    'baseUrl': baseUrl,
-  };
+        'name': name,
+        'baseUrl': baseUrl,
+      };
 
   @override
   String toString() => 'MirrorConfig($name, $baseUrl)';
@@ -74,14 +124,14 @@ class MirrorStatus {
   bool get isOperational => isAccessible && latestSnapshot != null;
 
   Map<String, dynamic> toJson() => {
-    'mirror': mirror.toJson(),
-    'isAccessible': isAccessible,
-    'latencyMs': latencyMs,
-    'latestSnapshot': latestSnapshot,
-    'error': error,
-    'isFromMetaserver': isFromMetaserver,
-    'isOperational': isOperational,
-  };
+        'mirror': mirror.toJson(),
+        'isAccessible': isAccessible,
+        'latencyMs': latencyMs,
+        'latestSnapshot': latestSnapshot,
+        'error': error,
+        'isFromMetaserver': isFromMetaserver,
+        'isOperational': isOperational,
+      };
 }
 
 /// Represents a snapshot version (YYMMDD format)
@@ -107,9 +157,9 @@ class Snapshot {
       '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
 
   Map<String, dynamic> toJson() => {
-    'version': version,
-    'date': formattedDate,
-  };
+        'version': version,
+        'date': formattedDate,
+      };
 
   @override
   bool operator ==(Object other) =>
@@ -146,26 +196,49 @@ class MwmRegion {
 
   String get fileName => '$id.mwm';
 
-  String get sizeMB => (sizeBytes / (1024 * 1024)).toStringAsFixed(2);
+  List<MwmRegion> get children => subregions ?? const <MwmRegion>[];
+
+  bool get isGroup => children.isNotEmpty;
+
+  bool get isLeaf => !isGroup;
+
+  int get totalDownloadSizeBytes => isGroup
+      ? children.fold<int>(
+          0,
+          (sum, child) => sum + child.totalDownloadSizeBytes,
+        )
+      : sizeBytes;
+
+  String get sizeMB =>
+      (totalDownloadSizeBytes / (1024 * 1024)).toStringAsFixed(2);
+
+  List<MwmRegion> get leafRegions {
+    if (isLeaf) return [this];
+    return [
+      for (final child in children) ...child.leafRegions,
+    ];
+  }
 
   /// Human-readable display name with underscores replaced by spaces
   String get displayName => Uri.decodeComponent(id).replaceAll('_', ' ');
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'name': name, // For backward compatibility with cache
-    'fileName': fileName,
-    'sizeBytes': sizeBytes,
-    'sizeMB': sizeMB,
-    'sha1Base64': sha1Base64,
-    if (oldNames != null) 'oldNames': oldNames,
-    if (subregions != null) 'subregions': subregions!.map((r) => r.toJson()).toList(),
-  };
+        'id': id,
+        'name': name, // For backward compatibility with cache
+        'fileName': fileName,
+        'sizeBytes': sizeBytes,
+        'sizeMB': sizeMB,
+        'sha1Base64': sha1Base64,
+        if (oldNames != null) 'oldNames': oldNames,
+        if (subregions != null)
+          'subregions': subregions!.map((r) => r.toJson()).toList(),
+      };
 
   /// Create from CoMaps countries.txt JSON format
   /// Also supports legacy cache format with 'name' field
   factory MwmRegion.fromJson(Map<String, dynamic> json) {
-    final subregionsJson = json['g'] as List<dynamic>?;
+    final subregionsJson =
+        json['g'] as List<dynamic>? ?? json['subregions'] as List<dynamic>?;
     // Support both 'id' (countries.txt) and 'name' (legacy cache) formats
     final id = json['id'] as String? ?? json['name'] as String;
     // Support both 's' (countries.txt) and 'sizeBytes' (legacy cache) formats
@@ -175,7 +248,9 @@ class MwmRegion {
       sizeBytes: sizeBytes,
       sha1Base64: json['sha1_base64'] as String?,
       oldNames: (json['old'] as List<dynamic>?)?.cast<String>(),
-      subregions: subregionsJson?.map((j) => MwmRegion.fromJson(j as Map<String, dynamic>)).toList(),
+      subregions: subregionsJson
+          ?.map((j) => MwmRegion.fromJson(j as Map<String, dynamic>))
+          .toList(),
     );
   }
 
@@ -204,9 +279,15 @@ class CountriesData {
         }
       }
     }
+
     addRegions(regions);
     return result;
   }
+
+  /// Get only real downloadable MWM regions.
+  List<MwmRegion> get leafRegions => [
+        for (final region in regions) ...region.leafRegions,
+      ];
 
   /// Find a region by ID
   MwmRegion? findRegion(String id) {
@@ -217,21 +298,26 @@ class CountriesData {
   }
 
   /// Get total size of all regions
-  int get totalSizeBytes => allRegions.fold(0, (sum, r) => sum + r.sizeBytes);
+  int get totalSizeBytes =>
+      regions.fold(0, (sum, r) => sum + r.totalDownloadSizeBytes);
 
   Map<String, dynamic> toJson() => {
-    'version': version,
-    'totalRegions': allRegions.length,
-    'totalSizeBytes': totalSizeBytes,
-    'totalSizeMB': (totalSizeBytes / (1024 * 1024)).toStringAsFixed(2),
-    'regions': regions.map((r) => r.toJson()).toList(),
-  };
+        'version': version,
+        'totalRegions': allRegions.length,
+        'totalLeafRegions': leafRegions.length,
+        'totalSizeBytes': totalSizeBytes,
+        'totalSizeMB': (totalSizeBytes / (1024 * 1024)).toStringAsFixed(2),
+        'regions': regions.map((r) => r.toJson()).toList(),
+      };
 
   factory CountriesData.fromJson(Map<String, dynamic> json) {
-    final regionsJson = json['g'] as List<dynamic>? ?? [];
+    final regionsJson =
+        json['g'] as List<dynamic>? ?? json['regions'] as List<dynamic>? ?? [];
     return CountriesData(
-      version: json['v'] as int,
-      regions: regionsJson.map((j) => MwmRegion.fromJson(j as Map<String, dynamic>)).toList(),
+      version: json['v'] as int? ?? json['version'] as int,
+      regions: regionsJson
+          .map((j) => MwmRegion.fromJson(j as Map<String, dynamic>))
+          .toList(),
     );
   }
 }
@@ -295,7 +381,8 @@ class MirrorService {
   /// Build download URL for CoMaps CDN
   ///
   /// URL structure: `<base>/maps/<snapshot>/<fileName>`
-  static String buildDownloadUrl(String baseUrl, String snapshot, String fileName) {
+  static String buildDownloadUrl(
+      String baseUrl, String snapshot, String fileName) {
     return '${baseUrl}maps/$snapshot/$fileName';
   }
 
@@ -356,7 +443,8 @@ class MirrorService {
     List<String> candidates,
   ) async {
     for (final snapshot in candidates) {
-      final countriesUrl = buildDownloadUrl(mirror.baseUrl, snapshot, 'countries.txt');
+      final countriesUrl =
+          buildDownloadUrl(mirror.baseUrl, snapshot, 'countries.txt');
       try {
         final response = await _client
             .head(Uri.parse(countriesUrl))
@@ -372,7 +460,8 @@ class MirrorService {
   }
 
   /// Fetch and parse countries.txt from a mirror (JSON format)
-  Future<CountriesData?> fetchCountriesData(String baseUrl, String snapshot) async {
+  Future<CountriesData?> fetchCountriesData(
+      String baseUrl, String snapshot) async {
     final url = buildDownloadUrl(baseUrl, snapshot, 'countries.txt');
     try {
       final response = await _client
@@ -398,8 +487,12 @@ class MirrorService {
     String url,
     File destination, {
     void Function(int received, int total)? onProgress,
+    bool Function()? isCancelled,
   }) async {
     try {
+      if (isCancelled?.call() ?? false) {
+        return false;
+      }
       final request = http.Request('GET', Uri.parse(url));
       final response = await _client.send(request);
 
@@ -415,6 +508,9 @@ class MirrorService {
 
       try {
         await for (final chunk in response.stream) {
+          if (isCancelled?.call() ?? false) {
+            return false;
+          }
           sink.add(chunk);
           received += chunk.length;
           onProgress?.call(received, contentLength);
@@ -440,7 +536,11 @@ class MirrorService {
     String url,
     File destination, {
     void Function(int received, int total)? onProgress,
+    bool Function()? isCancelled,
   }) async {
+    if (isCancelled?.call() ?? false) {
+      throw Exception('Download cancelled: $url');
+    }
     final request = http.Request('GET', Uri.parse(url));
     final response = await _client.send(request);
 
@@ -458,6 +558,9 @@ class MirrorService {
     final sink = destination.openWrite();
     try {
       await for (final chunk in response.stream) {
+        if (isCancelled?.call() ?? false) {
+          throw Exception('Download cancelled: $url');
+        }
         sink.add(chunk);
         received += chunk.length;
         onProgress?.call(received, contentLength);
@@ -475,15 +578,15 @@ class MirrorService {
   /// and returns the fastest operational mirror.
   Future<MirrorStatus?> getBestMirror() async {
     final metaserverUrls = await queryMetaserver();
-    final metaserverSet = metaserverUrls.toSet();
+    final candidateMirrors = mergeMetaserverMirrors(mirrors, metaserverUrls);
     final candidateSnapshots = generateCandidateVersions();
 
     final results = <MirrorStatus>[];
 
-    for (final mirror in mirrors) {
-      final isFromMetaserver = metaserverSet.any((url) =>
-          mirror.baseUrl.contains(url.replaceAll('https://', '').replaceAll('/', '')) ||
-          url.contains(mirror.baseUrl.replaceAll('https://', '').replaceAll('/', '')));
+    for (final mirror in candidateMirrors) {
+      final isFromMetaserver = metaserverUrls.any(
+        (url) => mirrorUrlsMatch(url, mirror.baseUrl),
+      );
 
       final status = await checkMirror(
         mirror,
@@ -497,7 +600,8 @@ class MirrorService {
     final operational = results.where((r) => r.isOperational).toList();
     if (operational.isEmpty) return null;
 
-    operational.sort((a, b) => (a.latencyMs ?? 999999).compareTo(b.latencyMs ?? 999999));
+    operational.sort(
+        (a, b) => (a.latencyMs ?? 999999).compareTo(b.latencyMs ?? 999999));
     return operational.first;
   }
 

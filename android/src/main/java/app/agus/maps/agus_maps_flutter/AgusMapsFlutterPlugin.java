@@ -182,13 +182,31 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
         Double densityArg = request.getDensity();
 
         if (width > 0 && height > 0) {
-            surfaceWidth = width;
-            surfaceHeight = height;
-            surfaceProducer.setSize(width, height);
-            nativeOnSizeChanged(width, height);
+            float requestedDensity = density;
             if (densityArg != null && densityArg > 0) {
-                nativeSetVisualScale(densityArg.floatValue());
+                requestedDensity = densityArg.floatValue();
             }
+
+            boolean sizeUnchanged = width == surfaceWidth && height == surfaceHeight;
+            boolean densityUnchanged = Math.abs(requestedDensity - density) < 0.0001f;
+
+            if (sizeUnchanged && densityUnchanged) {
+                result.success(true);
+                return;
+            }
+
+            if (!sizeUnchanged) {
+                surfaceWidth = width;
+                surfaceHeight = height;
+                surfaceProducer.setSize(width, height);
+                nativeOnSizeChanged(width, height);
+            }
+
+            if (!densityUnchanged) {
+                density = requestedDensity;
+                nativeSetVisualScale(density);
+            }
+
             result.success(true);
         } else {
             result.error(new AgusMapsApi.FlutterError(
@@ -215,6 +233,48 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
         mapReadySent = false;
 
         sendRenderStateChanged(AgusMapsApi.RenderState.IDLE, null);
+        result.success(true);
+    }
+
+    @Override
+    public void updateMapPointer(
+            @NonNull AgusMapsApi.MapPointerUpdateRequest request,
+            @NonNull AgusMapsApi.NullableResult<AgusMapsApi.MapPointerCoordinate> result) {
+        double[] latLon = new double[2];
+        int projected = nativeUpdateMapPointer(
+                request.getPhysicalX(),
+                request.getPhysicalY(),
+                request.getInsideMap() ? 1 : 0,
+                latLon);
+        if (projected != 1) {
+            result.success(null);
+            return;
+        }
+        result.success(new AgusMapsApi.MapPointerCoordinate.Builder()
+                .setPhysicalX(request.getPhysicalX())
+                .setPhysicalY(request.getPhysicalY())
+                .setInsideMap(request.getInsideMap())
+                .setLat(latLon[0])
+                .setLon(latLon[1])
+                .build());
+    }
+
+    @Override
+    public void updateDrapeInteractionGeometry(
+            @NonNull AgusMapsApi.DrapeInteractionGeometryRequest request,
+            @NonNull AgusMapsApi.Result<Boolean> result) {
+        AgusMapsApi.DrapeInteractionLineStyle style = request.getLineStyle();
+        nativeUpdateDrapeInteractionGeometry(
+                request.getMode().intValue(),
+                request.getGeometryWkt(),
+                style.getColorRed().intValue(),
+                style.getColorGreen().intValue(),
+                style.getColorBlue().intValue(),
+                style.getOpacity(),
+                style.getWidth(),
+                style.getDashed() ? 1 : 0,
+                style.getDashLength(),
+                style.getGapLength());
         result.success(true);
     }
 
@@ -253,6 +313,19 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
     private native void nativeSetLocale(String locale);
     private native AgusMapsApi.PlacePageData nativeGetCurrentPlacePage();
     private native void nativeClearPlacePageSelection();
+    private native int nativeUpdateMapPointer(
+            double physicalX, double physicalY, int insideMap, double[] latLon);
+    private native void nativeUpdateDrapeInteractionGeometry(
+            int mode,
+            String geometryWkt,
+            int red,
+            int green,
+            int blue,
+            double opacity,
+            double width,
+            int dashed,
+            double dashLength,
+            double gapLength);
 
   /**
    * Called from native code when an active frame is rendered.
@@ -350,6 +423,8 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
     File fontsDir = new File(filesDir, "fonts");
     File unicodeBlockFile = new File(fontsDir, "unicode_blocks.txt");
     File localizedTypesFile = new File(filesDir, "localized_types/en.lproj/LocalizableTypes.strings");
+    File categoriesBrandsFile = new File(filesDir, "categories_brands.txt");
+    File soundStringsFile = new File(filesDir, "sound-strings/en.json/localize.json");
     File lightSymbolsPng = new File(filesDir, "symbols/xxhdpi/light/symbols.png");
     File lightSymbolsSdf = new File(filesDir, "symbols/xxhdpi/light/symbols.sdf");
     File darkSymbolsPng = new File(filesDir, "symbols/xxhdpi/dark/symbols.png");
@@ -362,7 +437,7 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
             darkSymbolsSdf.exists() && darkSymbolsSdf.length() >= 1_000L;
     
     // Check if data is already extracted AND essential files exist
-    if (markerFile.exists() && unicodeBlockFile.exists() && localizedTypesFile.exists() && symbolsReady) {
+    if (markerFile.exists() && unicodeBlockFile.exists() && localizedTypesFile.exists() && categoriesBrandsFile.exists() && soundStringsFile.exists() && symbolsReady) {
         android.util.Log.d("AgusMapsFlutter", "Data already extracted at: " + filesDir.getAbsolutePath());
         return filesDir.getAbsolutePath();
     }

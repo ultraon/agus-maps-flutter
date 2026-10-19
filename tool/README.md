@@ -352,7 +352,7 @@ Build configuration constants and utilities.
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `defaultComapsTag` | `v2026.01.08-11` | Default CoMaps git tag |
+| `defaultComapsTag` | `v2026.04.23-19` | Default CoMaps git tag |
 | `flutterVersion` | `3.38.9` | Target Flutter version |
 | `cmakeVersion` | `4.2.1` | CMake version |
 | `ndkVersion` | `29.0.14206865` | Android NDK version |
@@ -530,7 +530,7 @@ General utility functions.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AGUS_MAPS_BUILD_MODE` | Build mode: `consumer` or `contributor` | Auto-detect |
-| `COMAPS_TAG` | CoMaps git tag to use | `v2026.01.08-11` |
+| `COMAPS_TAG` | CoMaps git tag to use | `v2026.04.23-19` |
 | `ANDROID_HOME` | Android SDK path | Auto-detect |
 | `ANDROID_SDK_ROOT` | Android SDK path (alternative) | Auto-detect |
 | `ANDROID_NDK_HOME` | Android NDK path | Auto-detect |
@@ -569,7 +569,10 @@ Set with: `AGUS_MAPS_BUILD_MODE=contributor` or auto-detected when in plugin rep
 
 ### Windows
 
-- Requires Visual Studio 2019/2022 with "Desktop development with C++" workload
+- Requires Visual Studio 2019/2022/2026 with "Desktop development with C++"
+  workload
+- The build tool selects the CMake Visual Studio generator from the installed
+  Visual Studio instance, not merely from generators advertised by CMake
 - CMake from Android SDK can be used if not in PATH
 - vcpkg is used for dependencies (set `VCPKG_ROOT`)
 - Git Bash is used for Unix-style scripts

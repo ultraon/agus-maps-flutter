@@ -74,6 +74,7 @@ These files are **required** for the CoMaps Framework to initialize:
 |------|---------|------|
 | `classificator.txt` | Map feature type hierarchy | ~500 KB |
 | `types.txt` | Type definitions for map features | ~30 KB |
+| `subtypes.csv` | POI subtype labels used by place-page formatting | ~20 KB |
 | `categories.txt` | Search category definitions | ~200 KB |
 | `visibility.txt` | Zoom-level visibility rules | ~50 KB |
 | `drules_proto.bin` | Binary drawing rules (default style) | ~2 MB |
@@ -154,7 +155,7 @@ dart run tool/build.dart --no-cache
 
 This will:
 1. Clone the CoMaps repository to `thirdparty/comaps/`
-2. Checkout the version specified in `$COMAPS_TAG` (default: `v2026.01.08-11`)
+2. Checkout the version specified in `$COMAPS_TAG` (default: `v2026.04.23-19`)
 3. Initialize all git submodules recursively
 4. Apply patches from `patches/comaps/`
 
@@ -166,7 +167,7 @@ ls thirdparty/comaps/data/
 
 # Expected output:
 # categories-strings/  countries.txt  drules_proto.bin  ...
-# categories.txt       countries_meta.txt  fonts/  ...
+# categories.txt       categories_brands.txt  countries_meta.txt  fonts/  ...
 ```
 
 
@@ -185,7 +186,7 @@ dart run tool/build.dart --no-cache
 1. **Checks** that `thirdparty/comaps/data/` exists
 2. **Creates** `example/assets/comaps_data/` directory
 3. **Copies** essential files:
-   - `classificator.txt`, `types.txt`, `categories.txt`, etc.
+   - `classificator.txt`, `types.txt`, `subtypes.csv`, `categories.txt`, etc.
    - `drules_proto*.bin` drawing rules
    - `packed_polygons.bin`, `countries*.txt`
 4. **Copies** localization directories:
@@ -302,7 +303,16 @@ Documents/
 If the marker file exists, extraction is skipped on subsequent app launches
 **only when extracted data passes completeness checks**.
 
-All supported platforms now validate the symbol atlas before trusting the
+All supported platforms now validate critical files before trusting
+`.comaps_data_extracted`. This is important when a previous app version
+extracted only part of the CoMaps data set. For example, iOS/macOS place pages
+require `subtypes.csv`; if it is missing, tapping some POIs can crash inside
+the native type formatter.
+
+Native search also requires `categories_brands.txt`; if it is missing, CoMaps
+ranking can throw while loading brand metadata for a query.
+
+All supported platforms also validate the symbol atlas before trusting the
 marker cache:
 - `symbols/xxhdpi/light/symbols.png` (minimum size guard)
 - `symbols/xxhdpi/light/symbols.sdf` (minimum size guard)
@@ -325,6 +335,7 @@ Windows example validation:
 const fs::path requiredFiles[] = {
     dataDir / "classificator.txt",
     dataDir / "types.txt",
+    dataDir / "subtypes.csv",
     dataDir / "drules_proto.bin",
     dataDir / "packed_polygons.bin",
     dataDir / "transit_colors.txt",
@@ -336,6 +347,10 @@ const fs::path requiredFiles[] = {
    dataDir / "symbols" / "xxhdpi" / "dark" / "symbols.sdf",
 };
 ```
+
+iOS and macOS perform equivalent checks in their Swift plugin files before
+returning the writable data directory. If any essential file is missing, the
+plugin removes the marker and re-extracts the bundled assets.
 
 
 ## Platform-Specific Behavior
@@ -380,17 +395,34 @@ private String extractDataFiles() throws IOException {
 | **Extraction Target** | `~/Documents/` (user's Documents directory) |
 | **Extraction Method** | `FileManager.copyItem()` |
 | **Marker File** | `~/Documents/.comaps_data_extracted` |
+| **Validation** | Re-extracts if essential files such as `subtypes.csv` are missing |
 | **iCloud Backup** | Excluded via `isExcludedFromBackup = true` |
 | **Validation** | Marker reuse requires symbol atlas presence + minimum size checks |
 
-**Implementation:** `ios/Classes/AgusMapsFlutterPlugin.swift`
+**Implementation:** `ios/agus_maps_flutter/Sources/agus_maps_flutter/AgusMapsFlutterPlugin.swift`
 
 ```swift
 private func extractDataFiles() throws -> String {
     let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
     let markerFile = documentsDir.appendingPathComponent(".comaps_data_extracted")
+    let essentialFiles = [
+        "classificator.txt",
+        "types.txt",
+        "subtypes.csv",
+        "categories.txt",
+        "visibility.txt",
+        "symbols/xxhdpi/light/symbols.sdf",
+        "symbols/xxhdpi/dark/symbols.sdf",
+    ]
     
-    if FileManager.default.fileExists(atPath: markerFile.path) {
+    let hasMarker = FileManager.default.fileExists(atPath: markerFile.path)
+    let hasEssentialFiles = essentialFiles.allSatisfy { relativePath in
+        FileManager.default.fileExists(
+            atPath: documentsDir.appendingPathComponent(relativePath).path
+        )
+    }
+
+    if hasMarker && hasEssentialFiles {
         return documentsDir.path
     }
     
@@ -412,9 +444,9 @@ private func extractDataFiles() throws -> String {
 | **Extraction Target** | `~/Documents/` (user's Documents directory) |
 | **Extraction Method** | Same as iOS (`FileManager.copyItem()`) |
 | **Marker File** | `~/Documents/.comaps_data_extracted` |
-| **Validation** | Marker reuse requires symbol atlas presence + minimum size checks |
+| **Validation** | Re-extracts if essential files such as `subtypes.csv` are missing or symbol atlas files are suspiciously small |
 
-**Implementation:** Shares code with iOS in `ios/Classes/AgusMapsFlutterPlugin.swift` (unified Apple platforms).
+**Implementation:** `macos/agus_maps_flutter/Sources/agus_maps_flutter/AgusMapsFlutterPlugin.swift`.
 
 ### Windows
 
@@ -548,7 +580,7 @@ To bundle MWM files with your Flutter app:
 
 ### Downloading MWM Files
 
-The plugin includes a download manager for fetching maps at runtime. The `MirrorService` supports both **CoMaps CDN servers** (recommended) and **Organic Maps mirrors** (legacy fallback):
+The plugin includes a download manager for fetching maps at runtime. The `MirrorService` uses the active **CoMaps CDN servers** from the CoMaps source defaults and merges any additional hosts returned by the CoMaps metaserver.
 
 #### Available Mirror Servers
 
@@ -557,18 +589,33 @@ The plugin includes a download manager for fetching maps at runtime. The `Mirror
 | **CoMaps CDN** | Finland | `https://cdn-fi-1.comaps.app/` |
 | **CoMaps CDN** | US | `https://cdn-us-2.comaps.tech/` |
 | **CoMaps CDN** | Germany | `https://comaps.firewall-gateway.de/` |
-| **CoMaps CDN** | Russia | `https://comaps-cdn.s3-website.cloud.ru/` |
+| **CoMaps CDN** | France | `https://comaps.openstreetmap.fr/` |
+| **CoMaps CDN** | Italy | `https://comaps-it1.unfoxo.it/` |
+| **CoMaps CDN** | Cloud.ru | `https://comaps-cdn.s3-website.cloud.ru/` |
 | **CoMaps CDN** | MapGen Finland | `https://mapgen-fi-1.comaps.app/` |
-| *Legacy* | WFR Software | `https://omaps.wfr.software/maps/` |
-| *Legacy* | WebFreak | `https://omaps.webfreak.org/maps/` |
 
 > **Note:** CoMaps CDN servers provide MWM files with enhanced features (improved routing, more POIs, better contour lines) since the April 2025 fork from Organic Maps.
+
+#### Region Hierarchy
+
+CoMaps publishes region metadata in `countries.txt` as a hierarchy. The Dart
+model preserves that tree:
+
+- `MirrorService.getCountriesData()` returns the full `CountriesData` tree for
+  folder-style browsing in UI.
+- `MirrorService.getRegions()` returns only leaf `MwmRegion` entries that
+  correspond to downloadable `.mwm` files.
+- Group sizes are aggregate sizes of descendant leaves, and group download/delete
+  actions should operate on those leaves.
+
+The example app cache key is `downloads_cache_v2` so old flat region caches are
+discarded automatically.
 
 ```dart
 import 'package:agus_maps_flutter/mirror_service.dart';
 import 'package:agus_maps_flutter/mwm_storage.dart';
 
-// Create mirror service - includes both CoMaps and Organic Maps mirrors
+// Create mirror service - includes CoMaps CDN defaults and metaserver hosts
 final mirrorService = MirrorService();
 
 // Measure latencies to find fastest server
@@ -579,7 +626,11 @@ final fastestMirror = mirrorService.getFastestMirror();
 final snapshots = await mirrorService.getSnapshots(fastestMirror!);
 final latestSnapshot = snapshots.first;
 
-// Get regions in snapshot
+// Get the browsable CoMaps countries tree.
+final countriesData =
+    await mirrorService.getCountriesData(fastestMirror, latestSnapshot);
+
+// Or get only downloadable leaf regions.
 final regions = await mirrorService.getRegions(fastestMirror, latestSnapshot);
 
 // Download a region
@@ -663,10 +714,11 @@ Ensure dependencies are installed for the symbols generator:
 
 ### "Search returns no results"
 
-**Cause:** Localization files missing or not extracted.
+**Cause:** Search data or localization files missing or not extracted.
 
 **Solution:**
-1. Verify `categories-strings/` and `countries-strings/` directories exist
+1. Verify `categories_brands.txt`, `categories-strings/`, and
+   `countries-strings/` exist under `example/assets/comaps_data/`
 2. Check that each locale is listed in `pubspec.yaml`:
    ```yaml
    - assets/comaps_data/categories-strings/en.json/

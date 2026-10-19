@@ -1,5 +1,5 @@
 diff --git a/libs/platform/CMakeLists.txt b/libs/platform/CMakeLists.txt
-index c26e864b1..5966daa70 100644
+index a1f103743..62b3e78cc 100644
 --- a/libs/platform/CMakeLists.txt
 +++ b/libs/platform/CMakeLists.txt
 @@ -35,8 +35,6 @@ set(SRC
@@ -22,10 +22,13 @@ index c26e864b1..5966daa70 100644
      localization.mm
      locale.mm
      network_policy_ios.h
-@@ -83,14 +81,75 @@ if (PLATFORM_IPHONE)
+@@ -82,17 +82,82 @@ if (PLATFORM_IPHONE)
+     platform_unix_impl.hpp
      secure_storage_ios.mm
      socket_apple.mm
-   )
+-    crypto/ed25519_apple.mm
++    crypto/ed25519_monocypher.cpp
++  )
 +elseif(SKIP_ANDROID_JNI AND ${PLATFORM_ANDROID})
 +  # Android build without JNI (for Flutter plugin with external platform impl)
 +  # Note: Platform::GetReader etc. is provided by external code (agus_platform.cpp)
@@ -37,7 +40,8 @@ index c26e864b1..5966daa70 100644
 +    http_uploader_background_dummy.cpp
 +    network_policy_dummy.cpp
 +    secure_storage_dummy.cpp
-+  )
++    crypto/ed25519_monocypher.cpp
+   )
  elseif(${PLATFORM_ANDROID})
 +  # Standard Android build with JNI and APK asset reader
    append(SRC
@@ -47,6 +51,7 @@ index c26e864b1..5966daa70 100644
      platform_unix_impl.cpp
      platform_unix_impl.hpp
      trace_android.cpp
+     crypto/ed25519_monocypher.cpp
    )
 -else() # neither iPhone nor Android
 +elseif(SKIP_QT AND ${PLATFORM_MAC})
@@ -67,6 +72,7 @@ index c26e864b1..5966daa70 100644
 +    secure_storage_dummy.cpp
 +    socket_apple.mm
 +    http_session_manager.mm
++    crypto/ed25519_monocypher.cpp
 +  )
 +elseif(SKIP_QT AND ${PLATFORM_WIN})
 +  # Windows build without Qt (for Flutter plugin)
@@ -80,6 +86,7 @@ index c26e864b1..5966daa70 100644
 +    locale_std.cpp
 +    platform_win.cpp
 +    secure_storage_dummy.cpp
++    crypto/ed25519_monocypher.cpp
 +  )
 +elseif(SKIP_QT AND ${PLATFORM_LINUX})
 +  # Linux build without Qt (for Flutter plugin with external platform impl)
@@ -94,12 +101,13 @@ index c26e864b1..5966daa70 100644
 +    platform_unix_impl.cpp
 +    platform_unix_impl.hpp
 +    secure_storage_dummy.cpp
++    crypto/ed25519_monocypher.cpp
 +  )
 +else() # Desktop with Qt (Linux, Windows, macOS Qt app)
    # Find bash first, on Windows it can be either in Git or in WSL
    find_program(BASH bash REQUIRED HINTS "$ENV{ProgramFiles}/Git/bin")
    # Generate version header file.
-@@ -111,6 +170,8 @@ else() # neither iPhone nor Android
+@@ -113,14 +178,16 @@ else() # neither iPhone nor Android
                    @ONLY)
  
    append(SRC
@@ -107,11 +115,44 @@ index c26e864b1..5966daa70 100644
 +    localization.hpp
      localization_dummy.cpp
      network_policy_dummy.cpp
-     platform_qt.cpp
-@@ -175,9 +236,9 @@ endif()
- target_link_libraries(${PROJECT_NAME}
+-    platform_qt.cpp
+-    "${CMAKE_CURRENT_BINARY_DIR}/platform_qt_version.cpp"
+   )
+ 
+   if (${PLATFORM_WIN})
+     append(SRC
++      platform_qt.cpp
++      "${CMAKE_CURRENT_BINARY_DIR}/platform_qt_version.cpp"
+       gui_thread_qt.cpp
+       http_client_curl.cpp
+       http_thread_qt.cpp
+@@ -147,10 +214,12 @@ else() # neither iPhone nor Android
+       secure_storage_qt.cpp
+       socket_apple.mm
+       http_session_manager.mm
+-      crypto/ed25519_apple.mm
++      crypto/ed25519_monocypher.cpp
+     )
+   elseif(${PLATFORM_LINUX})
+     append(SRC
++      platform_qt.cpp
++      "${CMAKE_CURRENT_BINARY_DIR}/platform_qt_version.cpp"
+       gui_thread_qt.cpp
+       http_client_curl.cpp
+       http_thread_qt.cpp
+@@ -177,7 +246,7 @@ if (PLATFORM_LINUX OR PLATFORM_WIN)
+   set_target_properties(${PROJECT_NAME} PROPERTIES AUTOMOC ON)
+ endif()
+ 
+-if (NOT APPLE)
++if (NOT APPLE OR PLATFORM_IPHONE OR PLATFORM_MAC)
+   target_link_libraries(${PROJECT_NAME} monocypher)
+ endif()
+ 
+@@ -185,9 +254,9 @@ target_link_libraries(${PROJECT_NAME}
    geometry  # mercator::YToLat
    coding
+   indexer # feature::*
 -  $<$<BOOL:${PLATFORM_DESKTOP}>:Qt6::Core>
 -  $<$<BOOL:${PLATFORM_LINUX}>:Qt6::Network>
 -  $<$<BOOL:${PLATFORM_WIN}>:Qt6::Network>

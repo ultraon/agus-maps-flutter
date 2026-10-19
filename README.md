@@ -70,6 +70,26 @@ This project is currently in the **proof of concept stage**, demonstrating zero-
 
 Contributions for Windows ARM64 are welcome from developers with access to the required hardware!
 
+### Contributor Build Snapshot
+
+The current source workflow has been verified on Apple platforms with the Dart build tool:
+
+```bash
+# From the repository root, build native Apple binaries from source.
+env -u AGUS_MAPS_HOME AGUS_MAPS_BUILD_MODE=contributor \
+  dart run tool/build.dart --build-binaries --platform ios 2>&1 | tee ./output.log
+
+env -u AGUS_MAPS_HOME AGUS_MAPS_BUILD_MODE=contributor \
+  dart run tool/build.dart --build-binaries --platform macos 2>&1 | tee ./output.log
+
+# Then verify the example apps without launching them.
+cd example
+flutter build ios --debug --no-codesign 2>&1 | tee ../output.log
+flutter build macos --debug 2>&1 | tee ../output.log
+```
+
+If Xcode reports a missing `ios/Classes/AgusMapsApi.g.swift`, the workspace is stale. From the repo root, run `cd example && flutter pub get && cd ios && pod install`, then reopen `example/ios/Runner.xcworkspace`.
+
 ### Why Another Map Plugin?
 
 Most Flutter map solutions either:
@@ -85,22 +105,22 @@ The following videos showcase the **Agus Maps plugin** running on various platfo
 <table>
   <tr>
     <td align="center" width="50%">
-      <a href="https://youtu.be/YVaBJ8uW5Ag">
-        <img src="https://img.youtube.com/vi/YVaBJ8uW5Ag/maxresdefault.jpg" alt="Android Demo" width="100%">
+      <a href="https://youtu.be/vaBReVqbYhU">
+        <img src="https://img.youtube.com/vi/vaBReVqbYhU/maxresdefault.jpg" alt="Android Demo" width="100%">
         <br><strong>📱 Android</strong>
       </a>
     </td>
     <td align="center" width="50%">
-      <a href="https://youtu.be/Jt0QE9Umsng">
-        <img src="https://img.youtube.com/vi/Jt0QE9Umsng/maxresdefault.jpg" alt="iOS Demo" width="100%">
+      <a href="https://youtu.be/ddIif7v_ayA">
+        <img src="https://img.youtube.com/vi/ddIif7v_ayA/maxresdefault.jpg" alt="iOS Demo" width="100%">
         <br><strong>📱 iOS</strong>
       </a>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <a href="https://youtu.be/Gd53HFrAGts">
-        <img src="https://img.youtube.com/vi/Gd53HFrAGts/maxresdefault.jpg" alt="macOS Demo" width="100%">
+      <a href="https://youtu.be/TlqcftVdAss">
+        <img src="https://img.youtube.com/vi/TlqcftVdAss/maxresdefault.jpg" alt="macOS Demo" width="100%">
         <br><strong>🖥️ macOS</strong>
       </a>
     </td>
@@ -120,7 +140,12 @@ The following videos showcase the **Agus Maps plugin** running on various platfo
         <br><strong>🐧 Linux</strong>
       </a>
     </td>
-    <td width="50%"></td>
+    <td align="center" width="50%">
+      <a href="https://youtu.be/m_pS7_WK5Cg">
+        <img src="https://img.youtube.com/vi/m_pS7_WK5Cg/maxresdefault.jpg" alt="Android Landscape Demo" width="100%">
+        <br><strong>📱 Android Landscape</strong>
+      </a>
+    </td>
   </tr>
 </table>
 
@@ -680,6 +705,8 @@ Developers can add custom overlay lines by calling `AgusWglContextFactory::SetOv
 | [doc/ARCHITECTURE-ANDROID.md](doc/ARCHITECTURE-ANDROID.md) | Deep dive: memory efficiency, battery savings, how it works |
 | [doc/COMAPS-ASSETS.md](doc/COMAPS-ASSETS.md) | **CoMaps asset management:** data files, localization, MWM maps |
 | [doc/IMPLEMENTATION-NATIVE-MESSAGE-PASSING.md](doc/IMPLEMENTATION-NATIVE-MESSAGE-PASSING.md) | **Native message passing:** Pigeon + FFI APIs, models, and platform wiring |
+| [doc/BUILD-CONFIGURATION.md](doc/BUILD-CONFIGURATION.md) | Debug/Profile/Release mapping for Flutter and native binaries |
+| [doc/DART-HOOKS.md](doc/DART-HOOKS.md) | Dart build tool, hooks, and source build orchestration |
 | [doc/IMPLEMENTATION-ANDROID.md](doc/IMPLEMENTATION-ANDROID.md) | Android build instructions, debug/release modes |
 | [doc/IMPLEMENTATION-IOS.md](doc/IMPLEMENTATION-IOS.md) | iOS build instructions and Metal integration |
 | [doc/IMPLEMENTATION-MACOS.md](doc/IMPLEMENTATION-MACOS.md) | macOS build instructions, window resize handling |
@@ -724,15 +751,19 @@ The CoMaps CDN provides MWM files with enhanced features not available in older 
 
 | Server | URL | Notes |
 |--------|-----|-------|
-| **CoMaps MapGen Finland** | `https://mapgen-fi-1.comaps.app/` | Primary (listed by metaserver) |
+| **CoMaps CDN Germany** | `https://comaps.firewall-gateway.de/` | CoMaps source default |
 | **CoMaps CDN US** | `https://cdn-us-2.comaps.tech/` | |
-| **CoMaps CDN Germany** | `https://comaps.firewall-gateway.de/` | |
+| **CoMaps CDN Finland** | `https://cdn-fi-1.comaps.app/` | |
+| **CoMaps CDN France** | `https://comaps.openstreetmap.fr/` | |
+| **CoMaps CDN Italy** | `https://comaps-it1.unfoxo.it/` | |
+| **CoMaps CDN Cloud.ru** | `https://comaps-cdn.s3-website.cloud.ru/` | |
+| **CoMaps MapGen Finland** | `https://mapgen-fi-1.comaps.app/` | Listed by metaserver |
 
 **URL Structure:** `<base>/maps/<version>/<file>`
 
 Example: `https://mapgen-fi-1.comaps.app/maps/260101/Gibraltar.mwm`
 
-> **Note:** The CoMaps metaserver at `https://cdn-us-1.comaps.app/servers` returns the currently active download servers.
+> **Note:** The CoMaps metaserver at `https://cdn-us-1.comaps.app/servers` returns currently active download servers. The runtime service and diagnostic tools merge metaserver-only hosts into the source default list before probing.
 
 ### Diagnostic Tool
 
@@ -743,7 +774,9 @@ dart run tool/check_mirrors.dart
 ```
 
 ### In-App Download
-**In-app (Example)**: Use the example app's Downloads tab to browse and download regions. The app automatically selects the fastest available CoMaps CDN server.
+**In-app (Example)**: Use the example app's Downloads tab to browse and download regions. The app automatically selects the fastest available CoMaps CDN server, preserves the CoMaps `countries.txt` hierarchy, and shows expandable country/region folders before individual downloadable `.mwm` files.
+
+The downloads cache is versioned (`downloads_cache_v2`) so older flat region lists are ignored and rebuilt from the hierarchical `countries.txt` payload.
 
 The example app bundles a small Gibraltar map for testing.
 

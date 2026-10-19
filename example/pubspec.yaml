@@ -1,5 +1,6 @@
 name: agus_maps_flutter_example
 description: "Demonstrates how to use the agus_maps_flutter plugin."
+resolution: workspace
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -31,8 +32,8 @@ dependencies:
   flutter:
     sdk: flutter
 
-  agus_maps_flutter:
-    path: ../
+  agus_design: ^0.0.1
+  agus_maps_flutter: ^0.1.24
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
@@ -45,13 +46,17 @@ dependencies:
   fuzzywuzzy: ^1.1.6
   
   # For connectivity checking
-  connectivity_plus: ^6.1.4
+  # Pin 7.0.0 until GitHub macOS runners provide an SDK with
+  # NWPath.isUltraConstrained, used by 7.1.x.
+  connectivity_plus: 7.0.0
   
   # For disk space detection on Android/iOS
   storage_space: ^1.2.0
 
   # For settings persistence
   shared_preferences: ^2.2.0
+  geolocator: ^14.0.2
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:
@@ -62,7 +67,7 @@ dev_dependencies:
   # activated in the `analysis_options.yaml` file located at the root of your
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
-  flutter_lints: ^5.0.0
+  flutter_lints: ^6.0.0
   
   # For generating app icons from logo.png
   flutter_launcher_icons: ^0.14.4
@@ -149,12 +154,15 @@ flutter:
     - assets/comaps_data/countries-strings/default.json/
     - assets/comaps_data/countries-strings/el.json/
     - assets/comaps_data/countries-strings/en.json/
+    - assets/comaps_data/countries-strings/en_CA.json/
     - assets/comaps_data/countries-strings/es.json/
+    - assets/comaps_data/countries-strings/es_419.json/
     - assets/comaps_data/countries-strings/et.json/
     - assets/comaps_data/countries-strings/eu.json/
     - assets/comaps_data/countries-strings/fa.json/
     - assets/comaps_data/countries-strings/fi.json/
     - assets/comaps_data/countries-strings/fr.json/
+    - assets/comaps_data/countries-strings/ga.json/
     - assets/comaps_data/countries-strings/he.json/
     - assets/comaps_data/countries-strings/hu.json/
     - assets/comaps_data/countries-strings/ia.json/
@@ -173,8 +181,8 @@ flutter:
     - assets/comaps_data/countries-strings/ru.json/
     - assets/comaps_data/countries-strings/sk.json/
     - assets/comaps_data/countries-strings/sr.json/
-    - assets/comaps_data/countries-strings/sr_Latn.json/
     - assets/comaps_data/countries-strings/sv.json/
+    - assets/comaps_data/countries-strings/ta.json/
     - assets/comaps_data/countries-strings/th.json/
     - assets/comaps_data/countries-strings/tr.json/
     - assets/comaps_data/countries-strings/uk.json/
@@ -190,22 +198,28 @@ flutter:
     - assets/comaps_data/localized_types/ber.lproj/
     - assets/comaps_data/localized_types/bg.lproj/
     - assets/comaps_data/localized_types/bn.lproj/
+    - assets/comaps_data/localized_types/brh.lproj/
     - assets/comaps_data/localized_types/ca.lproj/
     - assets/comaps_data/localized_types/cs.lproj/
     - assets/comaps_data/localized_types/cy.lproj/
     - assets/comaps_data/localized_types/da.lproj/
     - assets/comaps_data/localized_types/de.lproj/
     - assets/comaps_data/localized_types/el.lproj/
+    - assets/comaps_data/localized_types/en-CA.lproj/
     - assets/comaps_data/localized_types/en-GB.lproj/
     - assets/comaps_data/localized_types/en.lproj/
+    - assets/comaps_data/localized_types/en_CA.lproj/
     - assets/comaps_data/localized_types/eo.lproj/
+    - assets/comaps_data/localized_types/es-419.lproj/
     - assets/comaps_data/localized_types/es-MX.lproj/
     - assets/comaps_data/localized_types/es.lproj/
+    - assets/comaps_data/localized_types/es_419.lproj/
     - assets/comaps_data/localized_types/et.lproj/
     - assets/comaps_data/localized_types/eu.lproj/
     - assets/comaps_data/localized_types/fa.lproj/
     - assets/comaps_data/localized_types/fi.lproj/
     - assets/comaps_data/localized_types/fr.lproj/
+    - assets/comaps_data/localized_types/ga.lproj/
     - assets/comaps_data/localized_types/gl.lproj/
     - assets/comaps_data/localized_types/gsw.lproj/
     - assets/comaps_data/localized_types/he.lproj/
@@ -219,7 +233,10 @@ flutter:
     - assets/comaps_data/localized_types/ja.lproj/
     - assets/comaps_data/localized_types/kab.lproj/
     - assets/comaps_data/localized_types/kk.lproj/
+    - assets/comaps_data/localized_types/kmr.lproj/
+    - assets/comaps_data/localized_types/kn.lproj/
     - assets/comaps_data/localized_types/ko.lproj/
+    - assets/comaps_data/localized_types/kw.lproj/
     - assets/comaps_data/localized_types/lt.lproj/
     - assets/comaps_data/localized_types/lv.lproj/
     - assets/comaps_data/localized_types/ml.lproj/
@@ -234,6 +251,7 @@ flutter:
     - assets/comaps_data/localized_types/pt_PT.lproj/
     - assets/comaps_data/localized_types/ro.lproj/
     - assets/comaps_data/localized_types/ru.lproj/
+    - assets/comaps_data/localized_types/si.lproj/
     - assets/comaps_data/localized_types/sk.lproj/
     - assets/comaps_data/localized_types/sl.lproj/
     - assets/comaps_data/localized_types/sq.lproj/
@@ -248,6 +266,52 @@ flutter:
     - assets/comaps_data/localized_types/vi.lproj/
     - assets/comaps_data/localized_types/zh-Hans.lproj/
     - assets/comaps_data/localized_types/zh-Hant.lproj/
+    - assets/comaps_data/sound-strings/ar.json/
+    - assets/comaps_data/sound-strings/be.json/
+    - assets/comaps_data/sound-strings/bg.json/
+    - assets/comaps_data/sound-strings/ca.json/
+    - assets/comaps_data/sound-strings/cs.json/
+    - assets/comaps_data/sound-strings/da.json/
+    - assets/comaps_data/sound-strings/de.json/
+    - assets/comaps_data/sound-strings/el.json/
+    - assets/comaps_data/sound-strings/en.json/
+    - assets/comaps_data/sound-strings/en_CA.json/
+    - assets/comaps_data/sound-strings/es-MX.json/
+    - assets/comaps_data/sound-strings/es.json/
+    - assets/comaps_data/sound-strings/es_419.json/
+    - assets/comaps_data/sound-strings/et.json/
+    - assets/comaps_data/sound-strings/eu.json/
+    - assets/comaps_data/sound-strings/fa.json/
+    - assets/comaps_data/sound-strings/fi.json/
+    - assets/comaps_data/sound-strings/fr.json/
+    - assets/comaps_data/sound-strings/hi.json/
+    - assets/comaps_data/sound-strings/hr.json/
+    - assets/comaps_data/sound-strings/hu.json/
+    - assets/comaps_data/sound-strings/id.json/
+    - assets/comaps_data/sound-strings/it.json/
+    - assets/comaps_data/sound-strings/ja.json/
+    - assets/comaps_data/sound-strings/ko.json/
+    - assets/comaps_data/sound-strings/lt.json/
+    - assets/comaps_data/sound-strings/lv.json/
+    - assets/comaps_data/sound-strings/mr.json/
+    - assets/comaps_data/sound-strings/nb.json/
+    - assets/comaps_data/sound-strings/nl.json/
+    - assets/comaps_data/sound-strings/pl.json/
+    - assets/comaps_data/sound-strings/pt-BR.json/
+    - assets/comaps_data/sound-strings/pt.json/
+    - assets/comaps_data/sound-strings/ro.json/
+    - assets/comaps_data/sound-strings/ru.json/
+    - assets/comaps_data/sound-strings/sk.json/
+    - assets/comaps_data/sound-strings/sr.json/
+    - assets/comaps_data/sound-strings/sv.json/
+    - assets/comaps_data/sound-strings/sw.json/
+    - assets/comaps_data/sound-strings/ta.json/
+    - assets/comaps_data/sound-strings/th.json/
+    - assets/comaps_data/sound-strings/tr.json/
+    - assets/comaps_data/sound-strings/uk.json/
+    - assets/comaps_data/sound-strings/vi.json/
+    - assets/comaps_data/sound-strings/zh-Hans.json/
+    - assets/comaps_data/sound-strings/zh-Hant.json/
     - assets/comaps_data/styles/default/dark/
     - assets/comaps_data/styles/default/dark/symbols-ad/
     - assets/comaps_data/styles/default/dark/symbols/
@@ -262,17 +326,23 @@ flutter:
     - assets/comaps_data/styles/vehicle/include/
     - assets/comaps_data/styles/vehicle/light/
     - assets/comaps_data/symbols/6plus/dark/
+    - assets/comaps_data/symbols/6plus/design/
     - assets/comaps_data/symbols/6plus/light/
     - assets/comaps_data/symbols/default/
     - assets/comaps_data/symbols/hdpi/dark/
+    - assets/comaps_data/symbols/hdpi/design/
     - assets/comaps_data/symbols/hdpi/light/
     - assets/comaps_data/symbols/mdpi/dark/
+    - assets/comaps_data/symbols/mdpi/design/
     - assets/comaps_data/symbols/mdpi/light/
     - assets/comaps_data/symbols/xhdpi/dark/
+    - assets/comaps_data/symbols/xhdpi/design/
     - assets/comaps_data/symbols/xhdpi/light/
     - assets/comaps_data/symbols/xxhdpi/dark/
+    - assets/comaps_data/symbols/xxhdpi/design/
     - assets/comaps_data/symbols/xxhdpi/light/
     - assets/comaps_data/symbols/xxxhdpi/dark/
+    - assets/comaps_data/symbols/xxxhdpi/design/
     - assets/comaps_data/symbols/xxxhdpi/light/
     - assets/countries-strings/en.json/
     - assets/maps/

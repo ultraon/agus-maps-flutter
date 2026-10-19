@@ -31,8 +31,10 @@ All example app artifacts include the version tag in the filename (e.g., `-vX.Y.
 
 | Artifact | Description | Size (approx) |
 |----------|-------------|---------------|
-| `agus-maps-android-vX.Y.Z.apk` | Universal APK (direct install) | ~80 MB |
-| `agus-maps-android-vX.Y.Z.aab` | Android App Bundle (Play Store) | ~50 MB |
+| `agus-maps-android-arm64-v8a-vX.Y.Z.apk` | ARM64 APK (direct install) | ~231 MB |
+| `agus-maps-android-armeabi-v7a-vX.Y.Z.apk` | ARMv7 APK (direct install) | ~203 MB |
+| `agus-maps-android-x86_64-vX.Y.Z.apk` | x86_64 APK (emulator direct install) | ~238 MB |
+| `agus-maps-android-vX.Y.Z.aab` | Android App Bundle (Play Store) | ~367 MB |
 | `agus-maps-ios-simulator-vX.Y.Z.app.zip` | iOS Simulator app (debug) | ~100 MB |
 | `agus-maps-macos-vX.Y.Z.app.zip` | macOS app (release) | ~100 MB |
 | `agus-maps-windows-vX.Y.Z.zip` | Windows app (release, x86_64) | ~150 MB |
@@ -55,11 +57,11 @@ All example app artifacts include the version tag in the filename (e.g., `-vX.Y.
 
 3. **Install the APK**:
    ```bash
-   # Download the APK (replace vX.Y.Z with actual version)
-   curl -LO https://github.com/agus-works/agus-maps-flutter/releases/latest/download/agus-maps-android-vX.Y.Z.apk
+  # Download the APK for your device ABI (replace vX.Y.Z with actual version)
+  curl -LO https://github.com/agus-works/agus-maps-flutter/releases/latest/download/agus-maps-android-arm64-v8a-vX.Y.Z.apk
    
    # Install via ADB
-   adb install agus-maps-android-vX.Y.Z.apk
+  adb install agus-maps-android-arm64-v8a-vX.Y.Z.apk
    ```
 
 4. **Launch the app**: Find "Agus Maps" in your app drawer
@@ -77,8 +79,8 @@ All example app artifacts include the version tag in the filename (e.g., `-vX.Y.
 # Start an emulator (must have Google Play or be x86_64)
 emulator -avd Pixel_6_API_34
 
-# Install the APK (replace vX.Y.Z with actual version)
-adb install agus-maps-android-vX.Y.Z.apk
+# Install the x86_64 APK (replace vX.Y.Z with actual version)
+adb install agus-maps-android-x86_64-vX.Y.Z.apk
 
 # Launch the app
 adb shell am start -n app.agus.maps.agus_maps_flutter_example/.MainActivity
@@ -531,6 +533,23 @@ The example app includes minimal map data for testing. For production use, you'l
 | `'platform/platform.hpp' file not found` | Clear cached headers and re-run pod install (see below) |
 | `fatal error: '...' file not found` after SDK switch | Clear cached headers and re-run pod install (see below) |
 | Build worked before but fails after changing `AGUS_MAPS_HOME` | Clear cached headers and re-run pod install (see below) |
+| `Build input file cannot be found: ios/Classes/AgusMapsApi.g.swift` | Regenerate the Flutter/CocoaPods workspace; this is a stale Xcode file reference, not a current source file |
+
+#### Clearing Stale Xcode or CocoaPods References
+
+If Xcode references a generated Swift file that no longer exists, regenerate the
+workspace:
+
+```bash
+cd your_app
+flutter clean
+flutter pub get
+cd ios
+pod install
+```
+
+Close and reopen `Runner.xcworkspace`. If Xcode still reports the stale path,
+clean the build folder or delete the app's DerivedData entry.
 
 #### Clearing Cached Headers When Switching SDK Versions
 

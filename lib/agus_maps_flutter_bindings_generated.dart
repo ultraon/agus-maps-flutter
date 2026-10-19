@@ -153,6 +153,317 @@ class AgusMapsFlutterBindings {
   late final _comaps_set_view =
       _comaps_set_viewPtr.asFunction<void Function(double, double, int)>();
 
+  /// Get current viewport center coordinates in WGS84.
+  /// Returns 1 when values were written, 0 when the framework is not ready.
+  int comaps_get_viewport_center(
+    ffi.Pointer<ffi.Double> lat,
+    ffi.Pointer<ffi.Double> lon,
+  ) {
+    return _comaps_get_viewport_center(
+      lat,
+      lon,
+    );
+  }
+
+  late final _comaps_get_viewport_centerPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int Function(ffi.Pointer<ffi.Double>,
+              ffi.Pointer<ffi.Double>)>>('comaps_get_viewport_center');
+  late final _comaps_get_viewport_center =
+      _comaps_get_viewport_centerPtr.asFunction<
+          int Function(ffi.Pointer<ffi.Double>, ffi.Pointer<ffi.Double>)>();
+
+  /// Get the current integer draw scale/zoom level, or -1 when unavailable.
+  int comaps_get_current_zoom() {
+    return _comaps_get_current_zoom();
+  }
+
+  late final _comaps_get_current_zoomPtr =
+      _lookup<ffi.NativeFunction<ffi.Int Function()>>(
+          'comaps_get_current_zoom');
+  late final _comaps_get_current_zoom =
+      _comaps_get_current_zoomPtr.asFunction<int Function()>();
+
+  /// Converts physical screen coordinates to WGS84 coordinates using the latest
+  /// native viewport. Returns 1 when values were written.
+  int comaps_screen_to_latlon(
+    double physical_x,
+    double physical_y,
+    ffi.Pointer<ffi.Double> lat,
+    ffi.Pointer<ffi.Double> lon,
+  ) {
+    return _comaps_screen_to_latlon(
+      physical_x,
+      physical_y,
+      lat,
+      lon,
+    );
+  }
+
+  late final _comaps_screen_to_latlonPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int Function(ffi.Double, ffi.Double, ffi.Pointer<ffi.Double>,
+              ffi.Pointer<ffi.Double>)>>('comaps_screen_to_latlon');
+  late final _comaps_screen_to_latlon = _comaps_screen_to_latlonPtr.asFunction<
+      int Function(
+          double, double, ffi.Pointer<ffi.Double>, ffi.Pointer<ffi.Double>)>();
+
+  /// Updates the native map pointer tracker and converts it to WGS84 coordinates.
+  /// Returns 1 when values were written.
+  int comaps_update_map_pointer(
+    double physical_x,
+    double physical_y,
+    int inside_map,
+    ffi.Pointer<ffi.Double> lat,
+    ffi.Pointer<ffi.Double> lon,
+  ) {
+    return _comaps_update_map_pointer(
+      physical_x,
+      physical_y,
+      inside_map,
+      lat,
+      lon,
+    );
+  }
+
+  late final _comaps_update_map_pointerPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int Function(
+              ffi.Double,
+              ffi.Double,
+              ffi.Int,
+              ffi.Pointer<ffi.Double>,
+              ffi.Pointer<ffi.Double>)>>('comaps_update_map_pointer');
+  late final _comaps_update_map_pointer =
+      _comaps_update_map_pointerPtr.asFunction<
+          int Function(double, double, int, ffi.Pointer<ffi.Double>,
+              ffi.Pointer<ffi.Double>)>();
+
+  /// Converts WGS84 coordinates to physical screen coordinates using the latest
+  /// native viewport. Returns 1 when values were written.
+  int comaps_latlon_to_screen(
+    double lat,
+    double lon,
+    ffi.Pointer<ffi.Double> physical_x,
+    ffi.Pointer<ffi.Double> physical_y,
+  ) {
+    return _comaps_latlon_to_screen(
+      lat,
+      lon,
+      physical_x,
+      physical_y,
+    );
+  }
+
+  late final _comaps_latlon_to_screenPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int Function(ffi.Double, ffi.Double, ffi.Pointer<ffi.Double>,
+              ffi.Pointer<ffi.Double>)>>('comaps_latlon_to_screen');
+  late final _comaps_latlon_to_screen = _comaps_latlon_to_screenPtr.asFunction<
+      int Function(
+          double, double, ffi.Pointer<ffi.Double>, ffi.Pointer<ffi.Double>)>();
+
+  /// Relative zoom controls centered on the visible viewport.
+  void comaps_zoom_in(
+    int animated,
+  ) {
+    return _comaps_zoom_in(
+      animated,
+    );
+  }
+
+  late final _comaps_zoom_inPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>('comaps_zoom_in');
+  late final _comaps_zoom_in =
+      _comaps_zoom_inPtr.asFunction<void Function(int)>();
+
+  void comaps_zoom_out(
+    int animated,
+  ) {
+    return _comaps_zoom_out(
+      animated,
+    );
+  }
+
+  late final _comaps_zoom_outPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_zoom_out');
+  late final _comaps_zoom_out =
+      _comaps_zoom_outPtr.asFunction<void Function(int)>();
+
+  /// Map bearing in degrees where 0 is north-up.
+  double comaps_get_current_bearing() {
+    return _comaps_get_current_bearing();
+  }
+
+  late final _comaps_get_current_bearingPtr =
+      _lookup<ffi.NativeFunction<ffi.Double Function()>>(
+          'comaps_get_current_bearing');
+  late final _comaps_get_current_bearing =
+      _comaps_get_current_bearingPtr.asFunction<double Function()>();
+
+  void comaps_set_bearing(
+    double degrees,
+    int animated,
+  ) {
+    return _comaps_set_bearing(
+      degrees,
+      animated,
+    );
+  }
+
+  late final _comaps_set_bearingPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Double, ffi.Int)>>(
+          'comaps_set_bearing');
+  late final _comaps_set_bearing =
+      _comaps_set_bearingPtr.asFunction<void Function(double, int)>();
+
+  void comaps_reset_bearing(
+    int animated,
+  ) {
+    return _comaps_reset_bearing(
+      animated,
+    );
+  }
+
+  late final _comaps_reset_bearingPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_reset_bearing');
+  late final _comaps_reset_bearing =
+      _comaps_reset_bearingPtr.asFunction<void Function(int)>();
+
+  /// Enable/disable runtime 3D building rendering.
+  /// Flutter owns persistence for this setting; the native bridge only applies
+  /// the current process state to Drape.
+  void comaps_set_3d_buildings_enabled(
+    int enabled,
+  ) {
+    return _comaps_set_3d_buildings_enabled(
+      enabled,
+    );
+  }
+
+  late final _comaps_set_3d_buildings_enabledPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_set_3d_buildings_enabled');
+  late final _comaps_set_3d_buildings_enabled =
+      _comaps_set_3d_buildings_enabledPtr.asFunction<void Function(int)>();
+
+  int comaps_get_3d_buildings_enabled() {
+    return _comaps_get_3d_buildings_enabled();
+  }
+
+  late final _comaps_get_3d_buildings_enabledPtr =
+      _lookup<ffi.NativeFunction<ffi.Int Function()>>(
+          'comaps_get_3d_buildings_enabled');
+  late final _comaps_get_3d_buildings_enabled =
+      _comaps_get_3d_buildings_enabledPtr.asFunction<int Function()>();
+
+  /// Map theme: 0 = light, 1 = dark. Auto mode is resolved by Dart.
+  void comaps_set_map_theme(
+    int dark,
+  ) {
+    return _comaps_set_map_theme(
+      dark,
+    );
+  }
+
+  late final _comaps_set_map_themePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_set_map_theme');
+  late final _comaps_set_map_theme =
+      _comaps_set_map_themePtr.asFunction<void Function(int)>();
+
+  int comaps_get_map_theme_is_dark() {
+    return _comaps_get_map_theme_is_dark();
+  }
+
+  late final _comaps_get_map_theme_is_darkPtr =
+      _lookup<ffi.NativeFunction<ffi.Int Function()>>(
+          'comaps_get_map_theme_is_dark');
+  late final _comaps_get_map_theme_is_dark =
+      _comaps_get_map_theme_is_darkPtr.asFunction<int Function()>();
+
+  /// Overlay/style layers matching CoMaps mobile behavior:
+  /// outdoors and isolines may be enabled together; subway/transit disables both.
+  void comaps_set_outdoors_enabled(
+    int enabled,
+  ) {
+    return _comaps_set_outdoors_enabled(
+      enabled,
+    );
+  }
+
+  late final _comaps_set_outdoors_enabledPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_set_outdoors_enabled');
+  late final _comaps_set_outdoors_enabled =
+      _comaps_set_outdoors_enabledPtr.asFunction<void Function(int)>();
+
+  void comaps_set_isolines_enabled(
+    int enabled,
+  ) {
+    return _comaps_set_isolines_enabled(
+      enabled,
+    );
+  }
+
+  late final _comaps_set_isolines_enabledPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_set_isolines_enabled');
+  late final _comaps_set_isolines_enabled =
+      _comaps_set_isolines_enabledPtr.asFunction<void Function(int)>();
+
+  void comaps_set_subway_enabled(
+    int enabled,
+  ) {
+    return _comaps_set_subway_enabled(
+      enabled,
+    );
+  }
+
+  late final _comaps_set_subway_enabledPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int)>>(
+          'comaps_set_subway_enabled');
+  late final _comaps_set_subway_enabled =
+      _comaps_set_subway_enabledPtr.asFunction<void Function(int)>();
+
+  void comaps_get_map_layer_state(
+    ffi.Pointer<ffi.Int> outdoors,
+    ffi.Pointer<ffi.Int> isolines,
+    ffi.Pointer<ffi.Int> subway,
+  ) {
+    return _comaps_get_map_layer_state(
+      outdoors,
+      isolines,
+      subway,
+    );
+  }
+
+  late final _comaps_get_map_layer_statePtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<ffi.Int>, ffi.Pointer<ffi.Int>,
+              ffi.Pointer<ffi.Int>)>>('comaps_get_map_layer_state');
+  late final _comaps_get_map_layer_state =
+      _comaps_get_map_layer_statePtr.asFunction<
+          void Function(ffi.Pointer<ffi.Int>, ffi.Pointer<ffi.Int>,
+              ffi.Pointer<ffi.Int>)>();
+
+  /// Map label language code. Empty/null = auto; "default" = local/native names.
+  void comaps_set_map_language(
+    ffi.Pointer<ffi.Char> languageCode,
+  ) {
+    return _comaps_set_map_language(
+      languageCode,
+    );
+  }
+
+  late final _comaps_set_map_languagePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Char>)>>(
+          'comaps_set_map_language');
+  late final _comaps_set_map_language = _comaps_set_map_languagePtr
+      .asFunction<void Function(ffi.Pointer<ffi.Char>)>();
+
   /// Invalidate the current viewport to force tile reload
   void comaps_invalidate() {
     return _comaps_invalidate();
@@ -256,6 +567,390 @@ class AgusMapsFlutterBindings {
           'comaps_place_page_clear_selection');
   late final _comaps_place_page_clear_selection =
       _comaps_place_page_clear_selectionPtr.asFunction<void Function()>();
+
+  /// Start native CoMaps search. Returns the search generation, or a negative
+  /// value if the framework/query is not ready. When interactive is non-zero,
+  /// CoMaps also starts search-in-viewport for native map result marks.
+  int comaps_search_start(
+    ffi.Pointer<ffi.Char> query,
+    ffi.Pointer<ffi.Char> locale,
+    int interactive,
+    int isCategory,
+  ) {
+    return _comaps_search_start(
+      query,
+      locale,
+      interactive,
+      isCategory,
+    );
+  }
+
+  late final _comaps_search_startPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Char>,
+              ffi.Int32, ffi.Int32)>>('comaps_search_start');
+  late final _comaps_search_start = _comaps_search_startPtr.asFunction<
+      int Function(ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Char>, int, int)>();
+
+  /// Returns a heap-allocated snapshot of the latest native search state.
+  /// Call comaps_search_results_free when done.
+  ffi.Pointer<AgusSearchResults> comaps_search_copy_results() {
+    return _comaps_search_copy_results();
+  }
+
+  late final _comaps_search_copy_resultsPtr =
+      _lookup<ffi.NativeFunction<ffi.Pointer<AgusSearchResults> Function()>>(
+          'comaps_search_copy_results');
+  late final _comaps_search_copy_results = _comaps_search_copy_resultsPtr
+      .asFunction<ffi.Pointer<AgusSearchResults> Function()>();
+
+  /// Frees a snapshot allocated by comaps_search_copy_results.
+  void comaps_search_results_free(
+    ffi.Pointer<AgusSearchResults> data,
+  ) {
+    return _comaps_search_results_free(
+      data,
+    );
+  }
+
+  late final _comaps_search_results_freePtr = _lookup<
+          ffi
+          .NativeFunction<ffi.Void Function(ffi.Pointer<AgusSearchResults>)>>(
+      'comaps_search_results_free');
+  late final _comaps_search_results_free = _comaps_search_results_freePtr
+      .asFunction<void Function(ffi.Pointer<AgusSearchResults>)>();
+
+  /// Selects a non-suggestion result from the latest native search result list.
+  /// Returns 1 on success, 0 if the index points to a suggestion, or negative on
+  /// invalid state/index.
+  int comaps_search_show_result(
+    int index,
+  ) {
+    return _comaps_search_show_result(
+      index,
+    );
+  }
+
+  late final _comaps_search_show_resultPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32)>>(
+          'comaps_search_show_result');
+  late final _comaps_search_show_result =
+      _comaps_search_show_resultPtr.asFunction<int Function(int)>();
+
+  /// Cancels active native search requests and clears cached search results.
+  void comaps_search_cancel() {
+    return _comaps_search_cancel();
+  }
+
+  late final _comaps_search_cancelPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function()>>('comaps_search_cancel');
+  late final _comaps_search_cancel =
+      _comaps_search_cancelPtr.asFunction<void Function()>();
+
+  int comaps_navigation_set_router(
+    int routerType,
+  ) {
+    return _comaps_navigation_set_router(
+      routerType,
+    );
+  }
+
+  late final _comaps_navigation_set_routerPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32)>>(
+          'comaps_navigation_set_router');
+  late final _comaps_navigation_set_router =
+      _comaps_navigation_set_routerPtr.asFunction<int Function(int)>();
+
+  int comaps_navigation_get_router() {
+    return _comaps_navigation_get_router();
+  }
+
+  late final _comaps_navigation_get_routerPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_get_router');
+  late final _comaps_navigation_get_router =
+      _comaps_navigation_get_routerPtr.asFunction<int Function()>();
+
+  int comaps_navigation_add_route_point(
+    int markType,
+    ffi.Pointer<ffi.Char> title,
+    ffi.Pointer<ffi.Char> subtitle,
+    double lat,
+    double lon,
+    int intermediateIndex,
+    int isMyPosition,
+    int reorderIntermediatePoints,
+  ) {
+    return _comaps_navigation_add_route_point(
+      markType,
+      title,
+      subtitle,
+      lat,
+      lon,
+      intermediateIndex,
+      isMyPosition,
+      reorderIntermediatePoints,
+    );
+  }
+
+  late final _comaps_navigation_add_route_pointPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int32 Function(
+              ffi.Int32,
+              ffi.Pointer<ffi.Char>,
+              ffi.Pointer<ffi.Char>,
+              ffi.Double,
+              ffi.Double,
+              ffi.Int32,
+              ffi.Int32,
+              ffi.Int32)>>('comaps_navigation_add_route_point');
+  late final _comaps_navigation_add_route_point =
+      _comaps_navigation_add_route_pointPtr.asFunction<
+          int Function(int, ffi.Pointer<ffi.Char>, ffi.Pointer<ffi.Char>,
+              double, double, int, int, int)>();
+
+  void comaps_navigation_remove_route_point(
+    int markType,
+    int intermediateIndex,
+  ) {
+    return _comaps_navigation_remove_route_point(
+      markType,
+      intermediateIndex,
+    );
+  }
+
+  late final _comaps_navigation_remove_route_pointPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32, ffi.Int32)>>(
+          'comaps_navigation_remove_route_point');
+  late final _comaps_navigation_remove_route_point =
+      _comaps_navigation_remove_route_pointPtr
+          .asFunction<void Function(int, int)>();
+
+  void comaps_navigation_clear_route_points() {
+    return _comaps_navigation_clear_route_points();
+  }
+
+  late final _comaps_navigation_clear_route_pointsPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function()>>(
+          'comaps_navigation_clear_route_points');
+  late final _comaps_navigation_clear_route_points =
+      _comaps_navigation_clear_route_pointsPtr.asFunction<void Function()>();
+
+  int comaps_navigation_build_route() {
+    return _comaps_navigation_build_route();
+  }
+
+  late final _comaps_navigation_build_routePtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_build_route');
+  late final _comaps_navigation_build_route =
+      _comaps_navigation_build_routePtr.asFunction<int Function()>();
+
+  int comaps_navigation_follow_route() {
+    return _comaps_navigation_follow_route();
+  }
+
+  late final _comaps_navigation_follow_routePtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_follow_route');
+  late final _comaps_navigation_follow_route =
+      _comaps_navigation_follow_routePtr.asFunction<int Function()>();
+
+  void comaps_navigation_close_route(
+    int removeRoutePoints,
+  ) {
+    return _comaps_navigation_close_route(
+      removeRoutePoints,
+    );
+  }
+
+  late final _comaps_navigation_close_routePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32)>>(
+          'comaps_navigation_close_route');
+  late final _comaps_navigation_close_route =
+      _comaps_navigation_close_routePtr.asFunction<void Function(int)>();
+
+  int comaps_navigation_is_active() {
+    return _comaps_navigation_is_active();
+  }
+
+  late final _comaps_navigation_is_activePtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_is_active');
+  late final _comaps_navigation_is_active =
+      _comaps_navigation_is_activePtr.asFunction<int Function()>();
+
+  int comaps_navigation_is_built() {
+    return _comaps_navigation_is_built();
+  }
+
+  late final _comaps_navigation_is_builtPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_is_built');
+  late final _comaps_navigation_is_built =
+      _comaps_navigation_is_builtPtr.asFunction<int Function()>();
+
+  int comaps_navigation_is_building() {
+    return _comaps_navigation_is_building();
+  }
+
+  late final _comaps_navigation_is_buildingPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_is_building');
+  late final _comaps_navigation_is_building =
+      _comaps_navigation_is_buildingPtr.asFunction<int Function()>();
+
+  int comaps_navigation_is_following() {
+    return _comaps_navigation_is_following();
+  }
+
+  late final _comaps_navigation_is_followingPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_is_following');
+  late final _comaps_navigation_is_following =
+      _comaps_navigation_is_followingPtr.asFunction<int Function()>();
+
+  ffi.Pointer<AgusNavigationStatus> comaps_navigation_copy_status() {
+    return _comaps_navigation_copy_status();
+  }
+
+  late final _comaps_navigation_copy_statusPtr =
+      _lookup<ffi.NativeFunction<ffi.Pointer<AgusNavigationStatus> Function()>>(
+          'comaps_navigation_copy_status');
+  late final _comaps_navigation_copy_status = _comaps_navigation_copy_statusPtr
+      .asFunction<ffi.Pointer<AgusNavigationStatus> Function()>();
+
+  void comaps_navigation_status_free(
+    ffi.Pointer<AgusNavigationStatus> status,
+  ) {
+    return _comaps_navigation_status_free(
+      status,
+    );
+  }
+
+  late final _comaps_navigation_status_freePtr = _lookup<
+          ffi.NativeFunction<
+              ffi.Void Function(ffi.Pointer<AgusNavigationStatus>)>>(
+      'comaps_navigation_status_free');
+  late final _comaps_navigation_status_free = _comaps_navigation_status_freePtr
+      .asFunction<void Function(ffi.Pointer<AgusNavigationStatus>)>();
+
+  void comaps_navigation_set_measurement_units(
+    int units,
+  ) {
+    return _comaps_navigation_set_measurement_units(
+      units,
+    );
+  }
+
+  late final _comaps_navigation_set_measurement_unitsPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32)>>(
+          'comaps_navigation_set_measurement_units');
+  late final _comaps_navigation_set_measurement_units =
+      _comaps_navigation_set_measurement_unitsPtr
+          .asFunction<void Function(int)>();
+
+  int comaps_navigation_get_measurement_units() {
+    return _comaps_navigation_get_measurement_units();
+  }
+
+  late final _comaps_navigation_get_measurement_unitsPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_get_measurement_units');
+  late final _comaps_navigation_get_measurement_units =
+      _comaps_navigation_get_measurement_unitsPtr.asFunction<int Function()>();
+
+  void comaps_navigation_set_turn_notifications_enabled(
+    int enabled,
+  ) {
+    return _comaps_navigation_set_turn_notifications_enabled(
+      enabled,
+    );
+  }
+
+  late final _comaps_navigation_set_turn_notifications_enabledPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32)>>(
+          'comaps_navigation_set_turn_notifications_enabled');
+  late final _comaps_navigation_set_turn_notifications_enabled =
+      _comaps_navigation_set_turn_notifications_enabledPtr
+          .asFunction<void Function(int)>();
+
+  int comaps_navigation_get_turn_notifications_enabled() {
+    return _comaps_navigation_get_turn_notifications_enabled();
+  }
+
+  late final _comaps_navigation_get_turn_notifications_enabledPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_get_turn_notifications_enabled');
+  late final _comaps_navigation_get_turn_notifications_enabled =
+      _comaps_navigation_get_turn_notifications_enabledPtr
+          .asFunction<int Function()>();
+
+  void comaps_navigation_set_turn_notifications_locale(
+    ffi.Pointer<ffi.Char> locale,
+  ) {
+    return _comaps_navigation_set_turn_notifications_locale(
+      locale,
+    );
+  }
+
+  late final _comaps_navigation_set_turn_notifications_localePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Char>)>>(
+          'comaps_navigation_set_turn_notifications_locale');
+  late final _comaps_navigation_set_turn_notifications_locale =
+      _comaps_navigation_set_turn_notifications_localePtr
+          .asFunction<void Function(ffi.Pointer<ffi.Char>)>();
+
+  void comaps_navigation_set_speed_camera_mode(
+    int mode,
+  ) {
+    return _comaps_navigation_set_speed_camera_mode(
+      mode,
+    );
+  }
+
+  late final _comaps_navigation_set_speed_camera_modePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32)>>(
+          'comaps_navigation_set_speed_camera_mode');
+  late final _comaps_navigation_set_speed_camera_mode =
+      _comaps_navigation_set_speed_camera_modePtr
+          .asFunction<void Function(int)>();
+
+  int comaps_navigation_get_speed_camera_mode() {
+    return _comaps_navigation_get_speed_camera_mode();
+  }
+
+  late final _comaps_navigation_get_speed_camera_modePtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_get_speed_camera_mode');
+  late final _comaps_navigation_get_speed_camera_mode =
+      _comaps_navigation_get_speed_camera_modePtr.asFunction<int Function()>();
+
+  void comaps_navigation_set_avoid_routing_options(
+    int mask,
+  ) {
+    return _comaps_navigation_set_avoid_routing_options(
+      mask,
+    );
+  }
+
+  late final _comaps_navigation_set_avoid_routing_optionsPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32)>>(
+          'comaps_navigation_set_avoid_routing_options');
+  late final _comaps_navigation_set_avoid_routing_options =
+      _comaps_navigation_set_avoid_routing_optionsPtr
+          .asFunction<void Function(int)>();
+
+  int comaps_navigation_get_avoid_routing_options() {
+    return _comaps_navigation_get_avoid_routing_options();
+  }
+
+  late final _comaps_navigation_get_avoid_routing_optionsPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_get_avoid_routing_options');
+  late final _comaps_navigation_get_avoid_routing_options =
+      _comaps_navigation_get_avoid_routing_optionsPtr
+          .asFunction<int Function()>();
 
   /// Scale (zoom) the map by a factor, centered on a specific pixel point.
   /// factor: Zoom factor (>1 zooms in, <1 zooms out). Use exp(scrollDelta) for smooth zooming.
@@ -409,38 +1104,6 @@ class AgusMapsFlutterBindings {
   late final _comaps_get_registered_maps_count =
       _comaps_get_registered_maps_countPtr.asFunction<int Function()>();
 
-  /// Get current viewport center in WGS84 coordinates.
-  /// lat/lon are output pointers. Returns (0,0) if framework is not ready.
-  void comaps_get_viewport_center(
-    ffi.Pointer<ffi.Double> lat,
-    ffi.Pointer<ffi.Double> lon,
-  ) {
-    return _comaps_get_viewport_center(
-      lat,
-      lon,
-    );
-  }
-
-  late final _comaps_get_viewport_centerPtr = _lookup<
-      ffi.NativeFunction<
-          ffi.Void Function(ffi.Pointer<ffi.Double>,
-              ffi.Pointer<ffi.Double>)>>('comaps_get_viewport_center');
-  late final _comaps_get_viewport_center =
-      _comaps_get_viewport_centerPtr.asFunction<
-          void Function(ffi.Pointer<ffi.Double>, ffi.Pointer<ffi.Double>)>();
-
-  /// Get current zoom level (draw scale).
-  /// Returns 0 if framework is not ready.
-  int comaps_get_current_zoom() {
-    return _comaps_get_current_zoom();
-  }
-
-  late final _comaps_get_current_zoomPtr =
-      _lookup<ffi.NativeFunction<ffi.Int Function()>>(
-          'comaps_get_current_zoom');
-  late final _comaps_get_current_zoom =
-      _comaps_get_current_zoomPtr.asFunction<int Function()>();
-
   /// Feed a GPS location update to the native engine.
   /// The engine uses this to display the native "my position" marker.
   /// timestampMs: Unix epoch milliseconds
@@ -576,6 +1239,396 @@ class AgusMapsFlutterBindings {
   late final _comaps_clear_custom_markers =
       _comaps_clear_custom_markersPtr.asFunction<void Function()>();
 
+  /// Returns the linked DuckDB library version, or an empty string when unavailable.
+  ffi.Pointer<ffi.Char> agus_duckdb_library_version() {
+    return _agus_duckdb_library_version();
+  }
+
+  late final _agus_duckdb_library_versionPtr =
+      _lookup<ffi.NativeFunction<ffi.Pointer<ffi.Char> Function()>>(
+          'agus_duckdb_library_version');
+  late final _agus_duckdb_library_version = _agus_duckdb_library_versionPtr
+      .asFunction<ffi.Pointer<ffi.Char> Function()>();
+
+  /// Returns the last DuckDB bridge error message, or an empty string.
+  ffi.Pointer<ffi.Char> agus_duckdb_last_error() {
+    return _agus_duckdb_last_error();
+  }
+
+  late final _agus_duckdb_last_errorPtr =
+      _lookup<ffi.NativeFunction<ffi.Pointer<ffi.Char> Function()>>(
+          'agus_duckdb_last_error');
+  late final _agus_duckdb_last_error =
+      _agus_duckdb_last_errorPtr.asFunction<ffi.Pointer<ffi.Char> Function()>();
+
+  /// Opens the app-instance DuckDB file at writablePath/agus_layers.duckdb.
+  /// Returns 1 on success, 0 on failure.
+  int agus_duckdb_open_app_database(
+    ffi.Pointer<ffi.Char> writablePath,
+  ) {
+    return _agus_duckdb_open_app_database(
+      writablePath,
+    );
+  }
+
+  late final _agus_duckdb_open_app_databasePtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<ffi.Char>)>>(
+          'agus_duckdb_open_app_database');
+  late final _agus_duckdb_open_app_database = _agus_duckdb_open_app_databasePtr
+      .asFunction<int Function(ffi.Pointer<ffi.Char>)>();
+
+  /// Closes the current app-instance DuckDB connection, if any.
+  void agus_duckdb_close() {
+    return _agus_duckdb_close();
+  }
+
+  late final _agus_duckdb_closePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function()>>('agus_duckdb_close');
+  late final _agus_duckdb_close =
+      _agus_duckdb_closePtr.asFunction<void Function()>();
+
+  /// Returns 1 when the app-instance DuckDB connection is open.
+  int agus_duckdb_is_open() {
+    return _agus_duckdb_is_open();
+  }
+
+  late final _agus_duckdb_is_openPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>('agus_duckdb_is_open');
+  late final _agus_duckdb_is_open =
+      _agus_duckdb_is_openPtr.asFunction<int Function()>();
+
+  /// Loads and verifies the required static extensions for layer storage/querying.
+  /// Returns 1 on success, 0 on failure.
+  int agus_duckdb_load_required_extensions() {
+    return _agus_duckdb_load_required_extensions();
+  }
+
+  late final _agus_duckdb_load_required_extensionsPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'agus_duckdb_load_required_extensions');
+  late final _agus_duckdb_load_required_extensions =
+      _agus_duckdb_load_required_extensionsPtr.asFunction<int Function()>();
+
+  /// Executes unrestricted SQL against the app-instance DuckDB connection.
+  /// Returns 1 on success, 0 on failure.
+  int agus_duckdb_execute(
+    ffi.Pointer<ffi.Char> sql,
+  ) {
+    return _agus_duckdb_execute(
+      sql,
+    );
+  }
+
+  late final _agus_duckdb_executePtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<ffi.Char>)>>(
+          'agus_duckdb_execute');
+  late final _agus_duckdb_execute =
+      _agus_duckdb_executePtr.asFunction<int Function(ffi.Pointer<ffi.Char>)>();
+
+  /// Executes SQL and returns a JSON payload with columns, rows, and row_count.
+  /// Returns NULL on failure; call agus_duckdb_last_error() for diagnostics.
+  /// The returned pointer is owned by the bridge and remains valid until the next
+  /// DuckDB query-json call or bridge close/error mutation.
+  ffi.Pointer<ffi.Char> agus_duckdb_query_json(
+    ffi.Pointer<ffi.Char> sql,
+  ) {
+    return _agus_duckdb_query_json(
+      sql,
+    );
+  }
+
+  late final _agus_duckdb_query_jsonPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Pointer<ffi.Char> Function(
+              ffi.Pointer<ffi.Char>)>>('agus_duckdb_query_json');
+  late final _agus_duckdb_query_json = _agus_duckdb_query_jsonPtr
+      .asFunction<ffi.Pointer<ffi.Char> Function(ffi.Pointer<ffi.Char>)>();
+
+  /// Validates a query-layer SQL result contract without materializing rows.
+  /// Required columns are feature_id VARCHAR, geometry GEOMETRY, and properties JSON.
+  /// Optional style JSON and min_zoom/max_zoom/z_index INTEGER columns are checked
+  /// when present. Returns 1 on success, 0 on failure.
+  int agus_duckdb_validate_render_query(
+    ffi.Pointer<ffi.Char> sql,
+  ) {
+    return _agus_duckdb_validate_render_query(
+      sql,
+    );
+  }
+
+  late final _agus_duckdb_validate_render_queryPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<ffi.Char>)>>(
+          'agus_duckdb_validate_render_query');
+  late final _agus_duckdb_validate_render_query =
+      _agus_duckdb_validate_render_queryPtr
+          .asFunction<int Function(ffi.Pointer<ffi.Char>)>();
+
+  /// Copies currently renderable DuckDB features for a WGS84 viewport and zoom.
+  /// The returned array and nested strings are owned by the caller and must be
+  /// released with agus_duckdb_free_render_features(). Nullable zoom values are
+  /// returned as -1.
+  int agus_duckdb_copy_render_features(
+    double min_lon,
+    double min_lat,
+    double max_lon,
+    double max_lat,
+    int zoom,
+    ffi.Pointer<ffi.Pointer<AgusDuckDBRenderFeature>> out_features,
+    ffi.Pointer<ffi.Int32> out_count,
+  ) {
+    return _agus_duckdb_copy_render_features(
+      min_lon,
+      min_lat,
+      max_lon,
+      max_lat,
+      zoom,
+      out_features,
+      out_count,
+    );
+  }
+
+  late final _agus_duckdb_copy_render_featuresPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int32 Function(
+              ffi.Double,
+              ffi.Double,
+              ffi.Double,
+              ffi.Double,
+              ffi.Int32,
+              ffi.Pointer<ffi.Pointer<AgusDuckDBRenderFeature>>,
+              ffi.Pointer<ffi.Int32>)>>('agus_duckdb_copy_render_features');
+  late final _agus_duckdb_copy_render_features =
+      _agus_duckdb_copy_render_featuresPtr.asFunction<
+          int Function(
+              double,
+              double,
+              double,
+              double,
+              int,
+              ffi.Pointer<ffi.Pointer<AgusDuckDBRenderFeature>>,
+              ffi.Pointer<ffi.Int32>)>();
+
+  /// Copies a page of currently renderable DuckDB features for a WGS84 viewport
+  /// and zoom. Use limit/offset to avoid one large render allocation.
+  int agus_duckdb_copy_render_features_page(
+    double min_lon,
+    double min_lat,
+    double max_lon,
+    double max_lat,
+    int zoom,
+    int limit,
+    int offset,
+    ffi.Pointer<ffi.Pointer<AgusDuckDBRenderFeature>> out_features,
+    ffi.Pointer<ffi.Int32> out_count,
+  ) {
+    return _agus_duckdb_copy_render_features_page(
+      min_lon,
+      min_lat,
+      max_lon,
+      max_lat,
+      zoom,
+      limit,
+      offset,
+      out_features,
+      out_count,
+    );
+  }
+
+  late final _agus_duckdb_copy_render_features_pagePtr = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(
+                  ffi.Double,
+                  ffi.Double,
+                  ffi.Double,
+                  ffi.Double,
+                  ffi.Int32,
+                  ffi.Int32,
+                  ffi.Int32,
+                  ffi.Pointer<ffi.Pointer<AgusDuckDBRenderFeature>>,
+                  ffi.Pointer<ffi.Int32>)>>(
+      'agus_duckdb_copy_render_features_page');
+  late final _agus_duckdb_copy_render_features_page =
+      _agus_duckdb_copy_render_features_pagePtr.asFunction<
+          int Function(
+              double,
+              double,
+              double,
+              double,
+              int,
+              int,
+              int,
+              ffi.Pointer<ffi.Pointer<AgusDuckDBRenderFeature>>,
+              ffi.Pointer<ffi.Int32>)>();
+
+  /// Frees render features allocated by DuckDB render-feature copy APIs.
+  void agus_duckdb_free_render_features(
+    ffi.Pointer<AgusDuckDBRenderFeature> features,
+    int count,
+  ) {
+    return _agus_duckdb_free_render_features(
+      features,
+      count,
+    );
+  }
+
+  late final _agus_duckdb_free_render_featuresPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<AgusDuckDBRenderFeature>,
+              ffi.Int32)>>('agus_duckdb_free_render_features');
+  late final _agus_duckdb_free_render_features =
+      _agus_duckdb_free_render_featuresPtr.asFunction<
+          void Function(ffi.Pointer<AgusDuckDBRenderFeature>, int)>();
+
+  /// Android, macOS, and iOS wire DuckDB-backed rows into Drape user marks.
+  /// Returns the number of visible features submitted, or a negative value when
+  /// the map/DuckDB state is not ready. Other platforms will wire this later.
+  int agus_duckdb_refresh_render_layers() {
+    return _agus_duckdb_refresh_render_layers();
+  }
+
+  late final _agus_duckdb_refresh_render_layersPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'agus_duckdb_refresh_render_layers');
+  late final _agus_duckdb_refresh_render_layers =
+      _agus_duckdb_refresh_render_layersPtr.asFunction<int Function()>();
+
+  /// Renders selected-feature edit handles in a separate native Drape user-mark
+  /// group. The WKT is parsed for lon/lat vertex pairs and is not persisted here.
+  void agus_duckdb_set_edit_handles_from_wkt(
+    ffi.Pointer<ffi.Char> geometryWkt,
+  ) {
+    return _agus_duckdb_set_edit_handles_from_wkt(
+      geometryWkt,
+    );
+  }
+
+  late final _agus_duckdb_set_edit_handles_from_wktPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Char>)>>(
+          'agus_duckdb_set_edit_handles_from_wkt');
+  late final _agus_duckdb_set_edit_handles_from_wkt =
+      _agus_duckdb_set_edit_handles_from_wktPtr
+          .asFunction<void Function(ffi.Pointer<ffi.Char>)>();
+
+  /// Native Drape interaction state: 0 = inactive, 1 = drawing, 2 = editing.
+  /// The WKT is transient interaction geometry; Dart/DuckDB still own persistence.
+  void agus_duckdb_set_interaction_geometry_from_wkt(
+    int interactionMode,
+    ffi.Pointer<ffi.Char> geometryWkt,
+  ) {
+    return _agus_duckdb_set_interaction_geometry_from_wkt(
+      interactionMode,
+      geometryWkt,
+    );
+  }
+
+  late final _agus_duckdb_set_interaction_geometry_from_wktPtr = _lookup<
+          ffi
+          .NativeFunction<ffi.Void Function(ffi.Int32, ffi.Pointer<ffi.Char>)>>(
+      'agus_duckdb_set_interaction_geometry_from_wkt');
+  late final _agus_duckdb_set_interaction_geometry_from_wkt =
+      _agus_duckdb_set_interaction_geometry_from_wktPtr
+          .asFunction<void Function(int, ffi.Pointer<ffi.Char>)>();
+
+  /// Styleable interaction geometry path used by the Pigeon host API.
+  void agus_duckdb_update_interaction_geometry(
+    int interactionMode,
+    ffi.Pointer<ffi.Char> geometryWkt,
+    int red,
+    int green,
+    int blue,
+    double opacity,
+    double width,
+    int dashed,
+    double dashLength,
+    double gapLength,
+  ) {
+    return _agus_duckdb_update_interaction_geometry(
+      interactionMode,
+      geometryWkt,
+      red,
+      green,
+      blue,
+      opacity,
+      width,
+      dashed,
+      dashLength,
+      gapLength,
+    );
+  }
+
+  late final _agus_duckdb_update_interaction_geometryPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Void Function(
+              ffi.Int32,
+              ffi.Pointer<ffi.Char>,
+              ffi.Int32,
+              ffi.Int32,
+              ffi.Int32,
+              ffi.Double,
+              ffi.Double,
+              ffi.Int32,
+              ffi.Double,
+              ffi.Double)>>('agus_duckdb_update_interaction_geometry');
+  late final _agus_duckdb_update_interaction_geometry =
+      _agus_duckdb_update_interaction_geometryPtr.asFunction<
+          void Function(int, ffi.Pointer<ffi.Char>, int, int, int, double,
+              double, int, double, double)>();
+
+  void agus_duckdb_clear_edit_handles() {
+    return _agus_duckdb_clear_edit_handles();
+  }
+
+  late final _agus_duckdb_clear_edit_handlesPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function()>>(
+          'agus_duckdb_clear_edit_handles');
+  late final _agus_duckdb_clear_edit_handles =
+      _agus_duckdb_clear_edit_handlesPtr.asFunction<void Function()>();
+
+  /// Enables or disables viewport-driven DuckDB render refreshes on platforms that
+  /// implement native Drape integration.
+  void agus_duckdb_set_rendering_enabled(
+    int enabled,
+  ) {
+    return _agus_duckdb_set_rendering_enabled(
+      enabled,
+    );
+  }
+
+  late final _agus_duckdb_set_rendering_enabledPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Int32)>>(
+          'agus_duckdb_set_rendering_enabled');
+  late final _agus_duckdb_set_rendering_enabled =
+      _agus_duckdb_set_rendering_enabledPtr.asFunction<void Function(int)>();
+
+  /// Executes a SQL migration file against the app-instance DuckDB connection.
+  /// Returns 1 on success, 0 on failure.
+  int agus_duckdb_apply_migration_file(
+    ffi.Pointer<ffi.Char> path,
+  ) {
+    return _agus_duckdb_apply_migration_file(
+      path,
+    );
+  }
+
+  late final _agus_duckdb_apply_migration_filePtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Pointer<ffi.Char>)>>(
+          'agus_duckdb_apply_migration_file');
+  late final _agus_duckdb_apply_migration_file =
+      _agus_duckdb_apply_migration_filePtr
+          .asFunction<int Function(ffi.Pointer<ffi.Char>)>();
+
+  /// Applies embedded app schema migrations and verifies recorded checksums.
+  /// Returns 1 on success, 0 on failure.
+  int agus_duckdb_run_migrations() {
+    return _agus_duckdb_run_migrations();
+  }
+
+  late final _agus_duckdb_run_migrationsPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'agus_duckdb_run_migrations');
+  late final _agus_duckdb_run_migrations =
+      _agus_duckdb_run_migrationsPtr.asFunction<int Function()>();
+
   void agus_native_create_surface(
     int width,
     int height,
@@ -651,6 +1704,30 @@ class AgusMapsFlutterBindings {
       _agus_get_shared_texture_handlePtr
           .asFunction<ffi.Pointer<ffi.Void> Function()>();
 
+  /// Get the currently displayable DXGI shared texture handle and physical size.
+  /// The returned legacy shared handle is owned by the native D3D resource.
+  int agus_get_shared_texture_descriptor_info(
+    ffi.Pointer<ffi.Pointer<ffi.Void>> handle,
+    ffi.Pointer<ffi.Int32> width,
+    ffi.Pointer<ffi.Int32> height,
+  ) {
+    return _agus_get_shared_texture_descriptor_info(
+      handle,
+      width,
+      height,
+    );
+  }
+
+  late final _agus_get_shared_texture_descriptor_infoPtr = _lookup<
+          ffi.NativeFunction<
+              ffi.Int Function(ffi.Pointer<ffi.Pointer<ffi.Void>>,
+                  ffi.Pointer<ffi.Int32>, ffi.Pointer<ffi.Int32>)>>(
+      'agus_get_shared_texture_descriptor_info');
+  late final _agus_get_shared_texture_descriptor_info =
+      _agus_get_shared_texture_descriptor_infoPtr.asFunction<
+          int Function(ffi.Pointer<ffi.Pointer<ffi.Void>>,
+              ffi.Pointer<ffi.Int32>, ffi.Pointer<ffi.Int32>)>();
+
   /// Get the D3D11 device pointer (Windows only)
   ffi.Pointer<ffi.Void> agus_get_d3d11_device() {
     return _agus_get_d3d11_device();
@@ -672,6 +1749,32 @@ class AgusMapsFlutterBindings {
           'agus_get_d3d11_texture');
   late final _agus_get_d3d11_texture =
       _agus_get_d3d11_texturePtr.asFunction<ffi.Pointer<ffi.Void> Function()>();
+
+  /// Get an AddRef'd D3D11 texture pointer and its current physical size
+  /// atomically with respect to native resize. The caller must Release() the
+  /// returned texture pointer.
+  int agus_get_d3d11_texture_info(
+    ffi.Pointer<ffi.Pointer<ffi.Void>> texture,
+    ffi.Pointer<ffi.Int32> width,
+    ffi.Pointer<ffi.Int32> height,
+  ) {
+    return _agus_get_d3d11_texture_info(
+      texture,
+      width,
+      height,
+    );
+  }
+
+  late final _agus_get_d3d11_texture_infoPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int Function(
+              ffi.Pointer<ffi.Pointer<ffi.Void>>,
+              ffi.Pointer<ffi.Int32>,
+              ffi.Pointer<ffi.Int32>)>>('agus_get_d3d11_texture_info');
+  late final _agus_get_d3d11_texture_info =
+      _agus_get_d3d11_texture_infoPtr.asFunction<
+          int Function(ffi.Pointer<ffi.Pointer<ffi.Void>>,
+              ffi.Pointer<ffi.Int32>, ffi.Pointer<ffi.Int32>)>();
 
   /// Render a single frame (triggers frame ready callback)
   void agus_render_frame() {
@@ -801,6 +1904,156 @@ final class AgusPlacePageData extends ffi.Struct {
 
   @ffi.Int64()
   external int track_id;
+}
+
+/// Search result types mirrored from search::Result::Type.
+/// 0=Feature, 1=LatLon, 2=PureSuggest, 3=SuggestFromFeature, 4=Postcode.
+final class AgusSearchResult extends ffi.Struct {
+  @ffi.Int32()
+  external int index;
+
+  @ffi.Int32()
+  external int result_type;
+
+  @ffi.Int32()
+  external int is_suggestion;
+
+  @ffi.Int32()
+  external int has_point;
+
+  external ffi.Pointer<ffi.Char> title;
+
+  external ffi.Pointer<ffi.Char> subtitle;
+
+  external ffi.Pointer<ffi.Char> address;
+
+  external ffi.Pointer<ffi.Char> suggestion;
+
+  @ffi.Double()
+  external double lat;
+
+  @ffi.Double()
+  external double lon;
+}
+
+/// Search snapshot status values:
+/// 0=idle, 1=running, 2=completed, 3=cancelled, 4=error.
+final class AgusSearchResults extends ffi.Struct {
+  @ffi.Int32()
+  external int generation;
+
+  @ffi.Int32()
+  external int status;
+
+  @ffi.Int32()
+  external int result_count;
+
+  external ffi.Pointer<AgusSearchResult> results;
+}
+
+/// Navigation route point types mirrored from RouteMarkType:
+/// 0=Start, 1=Intermediate, 2=Finish.
+/// Router types mirror routing::RouterType: 0=Vehicle, 1=Pedestrian,
+/// 2=Bicycle, 3=Transit, 4=Ruler.
+/// Measurement units mirror measurement_utils::Units: 0=Metric, 1=Imperial.
+/// Speed camera modes mirror routing::SpeedCameraManagerMode:
+/// 0=Auto, 1=Always, 2=Never.
+/// Avoid route options are a bitmask of routing::RoutingOptions::Road values:
+/// Toll=2, Motorway=4, Ferry=8, Dirty/unpaved=16.
+final class AgusNavigationStatus extends ffi.Struct {
+  @ffi.Int32()
+  external int is_active;
+
+  @ffi.Int32()
+  external int is_built;
+
+  @ffi.Int32()
+  external int is_building;
+
+  @ffi.Int32()
+  external int is_following;
+
+  @ffi.Int32()
+  external int is_valid;
+
+  @ffi.Int32()
+  external int has_following_info;
+
+  @ffi.Int32()
+  external int router_type;
+
+  @ffi.Int32()
+  external int route_session_state;
+
+  @ffi.Int32()
+  external int turn;
+
+  @ffi.Int32()
+  external int next_turn;
+
+  @ffi.Int32()
+  external int pedestrian_turn;
+
+  @ffi.Int32()
+  external int exit_number;
+
+  @ffi.Int32()
+  external int total_time_seconds;
+
+  @ffi.Double()
+  external double completion_percent;
+
+  @ffi.Double()
+  external double speed_limit_mps;
+
+  @ffi.Double()
+  external double distance_to_target;
+
+  @ffi.Int32()
+  external int distance_to_target_units;
+
+  @ffi.Double()
+  external double distance_to_turn;
+
+  @ffi.Int32()
+  external int distance_to_turn_units;
+
+  @ffi.Double()
+  external double distance_to_next_stop;
+
+  @ffi.Int32()
+  external int distance_to_next_stop_units;
+
+  @ffi.Int32()
+  external int time_to_next_stop_seconds;
+
+  @ffi.Int32()
+  external int index_of_next_stop;
+
+  external ffi.Pointer<ffi.Char> current_street;
+
+  external ffi.Pointer<ffi.Char> next_street;
+
+  external ffi.Pointer<ffi.Char> next_next_street;
+}
+
+final class AgusDuckDBRenderFeature extends ffi.Struct {
+  external ffi.Pointer<ffi.Char> layer_id;
+
+  external ffi.Pointer<ffi.Char> feature_id;
+
+  external ffi.Pointer<ffi.Char> geometry_kind;
+
+  external ffi.Pointer<ffi.Char> geometry_wkt;
+
+  @ffi.Int32()
+  external int min_zoom;
+
+  @ffi.Int32()
+  external int max_zoom;
+
+  @ffi.Int32()
+  external int z_index;
 }
 
 typedef FrameReadyCallbackFunction = ffi.Void Function();

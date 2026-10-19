@@ -25,22 +25,43 @@ FFI_PLUGIN_EXPORT int sum_long_running(int a, int b) {
 #include <android/log.h>
 #include <jni.h>
 #include <android/native_window_jni.h>
+#include <algorithm>
 #include <chrono>
 #include <atomic>
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <iterator>
 #include <thread>
+#include <vector>
+#include <cmath>
 
 #include "base/file_name_utils.hpp"
 #include "base/logging.hpp"
+#include "base/localisation.hpp"
 #include "map/framework.hpp"
 #include "map/place_page_info.hpp"
 #include "indexer/feature_meta.hpp"
+#include "indexer/map_style.hpp"
+#include "indexer/map_style_reader.hpp"
+#include "indexer/scales.hpp"
 #include "platform/local_country_file.hpp"
+#include "drape/color.hpp"
 #include "drape/graphics_context_factory.hpp"
+#include "drape_frontend/drape_engine.hpp"
 #include "drape_frontend/visual_params.hpp"
 #include "drape_frontend/user_event_stream.hpp"
 #include "drape_frontend/active_frame_callback.hpp"
+#include "drape_frontend/user_marks_provider.hpp"
+#include "drape_frontend/drape_api.hpp"
 #include "geometry/mercator.hpp"
+#include "geometry/screenbase.hpp"
 #include "platform/localization.hpp"
+#include "agus_navigation_bridge.hpp"
+#include "agus_search_bridge.hpp"
 #include "agus_ogl.hpp"
 #include "platform/location.hpp"
 #include "map/gps_tracker.hpp"
@@ -87,6 +108,1001 @@ static std::string g_resourcePath;
 static std::string g_writablePath;
 static bool g_platformInitialized = false;
 static std::mutex g_placePageMutex;
+static bool g_drapeEngineCreated = false;
+static double g_currentBearingDegrees = 0.0;
+static bool g_3dBuildingsEnabled = false;
+static bool g_outdoorsEnabled = false;
+static bool g_isolinesEnabled = false;
+static bool g_subwayEnabled = false;
+
+namespace
+{
+double constexpr kDegreesPerRadian = 180.0 / 3.14159265358979323846;
+double constexpr kRadiansPerDegree = 3.14159265358979323846 / 180.0;
+kml::MarkGroupId constexpr kDuckDBRenderGroupId = 1ULL << 60;
+kml::MarkGroupId constexpr kDuckDBEditGroupId = kDuckDBRenderGroupId + 1;
+kml::MarkId constexpr kDuckDBPointMarkIdBase = kDuckDBRenderGroupId + 1;
+kml::TrackId constexpr kDuckDBLineMarkIdBase = kDuckDBRenderGroupId + (1ULL << 20);
+kml::MarkId constexpr kDuckDBEditPointMarkIdBase = kDuckDBEditGroupId + 1;
+kml::TrackId constexpr kDuckDBEditLineMarkIdBase = kDuckDBEditGroupId + (1ULL << 20);
+int32_t constexpr kDuckDBInteractionInactive = 0;
+int32_t constexpr kDuckDBInteractionDrawing = 1;
+int32_t constexpr kDuckDBInteractionEditingFeature = 2;
+int32_t constexpr kDuckDBRenderFetchBatchSize = 1000;
+int32_t constexpr kDuckDBRenderFetchMaxFeatures = 10000;
+auto constexpr kDuckDBViewportRefreshInterval = std::chrono::milliseconds(250);
+auto constexpr kDuckDBViewportIdleRefreshDelay = std::chrono::milliseconds(450);
+
+struct DuckDBInteractionLineStyle {
+    dp::Color color = dp::Color(37, 99, 235, 235);
+    float width = 2.0f;
+    bool dashed = false;
+    double dashLength = 10.0;
+    double gapLength = 6.0;
+};
+
+void WakeRenderer();
+std::vector<std::vector<m2::PointD>> BuildInteractionLineGeometries(
+    std::vector<m2::PointD> const & points,
+    DuckDBInteractionLineStyle const & style);
+
+template <typename Set>
+void AssignSetDifference(Set const & left, Set const & right, Set & output) {
+    output.clear();
+    std::set_difference(
+        left.begin(), left.end(),
+        right.begin(), right.end(),
+        std::inserter(output, output.end()),
+        left.key_comp());
+}
+
+struct DuckDBRenderableGeometry {
+    bool isPoint = false;
+    int minZoom = 1;
+    int zIndex = 0;
+    std::vector<m2::PointD> points;
+};
+
+bool AreDuckDBRenderablePointsEqual(
+    std::vector<m2::PointD> const & left,
+    std::vector<m2::PointD> const & right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+
+    for (size_t index = 0; index < left.size(); ++index) {
+        if (std::abs(left[index].x - right[index].x) > 1e-9 ||
+            std::abs(left[index].y - right[index].y) > 1e-9) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool AreDuckDBRenderableFeaturesEqual(
+    std::vector<DuckDBRenderableGeometry> const & left,
+    std::vector<DuckDBRenderableGeometry> const & right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+
+    for (size_t index = 0; index < left.size(); ++index) {
+        auto const & leftFeature = left[index];
+        auto const & rightFeature = right[index];
+        if (leftFeature.isPoint != rightFeature.isPoint ||
+            leftFeature.minZoom != rightFeature.minZoom ||
+            leftFeature.zIndex != rightFeature.zIndex ||
+            !AreDuckDBRenderablePointsEqual(
+                leftFeature.points,
+                rightFeature.points)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+struct DuckDBRenderViewport {
+    double minLon = 0.0;
+    double minLat = 0.0;
+    double maxLon = 0.0;
+    double maxLat = 0.0;
+};
+
+class DuckDBPointMark final : public df::UserPointMark {
+public:
+    DuckDBPointMark(kml::MarkId id, m2::PointD const & pivot, int minZoom,
+                    int zIndex, kml::MarkGroupId groupId = kDuckDBRenderGroupId,
+                    dp::Color color = dp::Color(0, 122, 255, 255),
+                    float radius = 6.5f)
+        : df::UserPointMark(id), m_pivot(pivot), m_minZoom(std::max(1, minZoom)),
+          m_zIndex(zIndex), m_groupId(groupId) {
+        auto const visualScale = static_cast<float>(df::VisualParams::Instance().GetVisualScale());
+        df::ColoredSymbolViewParams params;
+        params.m_outlineColor = dp::Color::White();
+        params.m_outlineWidth = 2.0f * visualScale;
+        params.m_radiusInPixels = radius * visualScale;
+        params.m_color = color;
+        m_coloredSymbols.m_needOverlay = false;
+        m_coloredSymbols.m_zoomInfo.emplace(1, params);
+    }
+
+    kml::MarkGroupId GetGroupId() const override { return m_groupId; }
+    bool IsDirty() const override { return m_dirty; }
+    void ResetChanges() const override { m_dirty = false; }
+    bool IsVisible() const override { return true; }
+    m2::PointD const & GetPivot() const override { return m_pivot; }
+    m2::PointD GetPixelOffset() const override { return {0.0, 0.0}; }
+    dp::Anchor GetAnchor() const override { return dp::Center; }
+    bool GetDepthTestEnabled() const override { return true; }
+    float GetDepth() const override { return kInvalidDepth; }
+    df::DepthLayer GetDepthLayer() const override { return df::DepthLayer::UserMarkLayer; }
+    drape_ptr<TitlesInfo> GetTitleDecl() const override { return nullptr; }
+    drape_ptr<SymbolNameZoomInfo> GetSymbolNames() const override { return nullptr; }
+    drape_ptr<ColoredSymbolZoomInfo> GetColoredSymbols() const override {
+        return make_unique_dp<ColoredSymbolZoomInfo>(m_coloredSymbols);
+    }
+    drape_ptr<SymbolSizes> GetSymbolSizes() const override { return nullptr; }
+    drape_ptr<SymbolOffsets> GetSymbolOffsets() const override { return nullptr; }
+    uint16_t GetPriority() const override {
+        return static_cast<uint16_t>(std::clamp(m_zIndex, 0, 65535));
+    }
+    df::SpecialDisplacement GetDisplacement() const override { return df::SpecialDisplacement::UserMark; }
+    uint32_t GetIndex() const override { return 0; }
+    bool SymbolIsPOI() const override { return true; }
+    bool HasTitlePriority() const override { return false; }
+    int GetMinZoom() const override { return m_minZoom; }
+    int GetMinTitleZoom() const override { return m_minZoom; }
+    FeatureID GetFeatureID() const override { return FeatureID(); }
+    bool HasCreationAnimation() const override { return false; }
+    df::ColorConstant GetColorConstant() const override { return {}; }
+    bool IsMarkAboveText() const override { return false; }
+    float GetSymbolOpacity() const override { return 1.0f; }
+    bool IsSymbolSelectable() const override { return false; }
+    bool IsNonDisplaceable() const override { return false; }
+
+private:
+    m2::PointD m_pivot;
+    int m_minZoom;
+    int m_zIndex;
+    kml::MarkGroupId m_groupId;
+    ColoredSymbolZoomInfo m_coloredSymbols;
+    mutable bool m_dirty = true;
+};
+
+class DuckDBLineMark final : public df::UserLineMark {
+public:
+    DuckDBLineMark(kml::TrackId id, std::vector<m2::PointD> points, int minZoom,
+                   int zIndex, kml::MarkGroupId groupId = kDuckDBRenderGroupId,
+                   dp::Color color = dp::Color(0, 122, 255, 220),
+                   float width = 4.0f,
+                   df::DepthLayer depthLayer = df::DepthLayer::UserLineLayer)
+        : df::UserLineMark(id), m_geometries({std::move(points)}),
+          m_minZoom(std::max(1, minZoom)), m_zIndex(zIndex),
+          m_groupId(groupId), m_color(color), m_depthLayer(depthLayer) {
+        m_width = width;
+    }
+
+    DuckDBLineMark(kml::TrackId id, std::vector<std::vector<m2::PointD>> geometries,
+                   int minZoom, int zIndex, kml::MarkGroupId groupId,
+                   DuckDBInteractionLineStyle const & style,
+                   df::DepthLayer depthLayer = df::DepthLayer::UserLineLayer)
+        : df::UserLineMark(id), m_geometries(std::move(geometries)),
+          m_minZoom(std::max(1, minZoom)), m_zIndex(zIndex),
+          m_groupId(groupId), m_color(style.color), m_depthLayer(depthLayer) {
+        m_width = style.width;
+    }
+
+    kml::MarkGroupId GetGroupId() const override { return m_groupId; }
+    bool IsDirty() const override { return m_dirty; }
+    void ResetChanges() const override { m_dirty = false; }
+    int GetMinZoom() const override { return m_minZoom; }
+    df::DepthLayer GetDepthLayer() const override { return m_depthLayer; }
+    size_t GetLayerCount() const override { return 1; }
+    dp::Color GetColor(size_t /* layerIndex */) const override {
+        return m_color;
+    }
+    float GetWidth(size_t /* layerIndex */) const override { return m_width; }
+    float GetDepth(size_t layerIndex) const override {
+        return static_cast<float>(layerIndex) * 10.0f;
+    }
+    void ForEachGeometry(GeometryFnT && fn) const override {
+        for (auto const & points : m_geometries) {
+            if (points.size() > 1) {
+                fn(std::vector<m2::PointD>(points));
+            }
+        }
+    }
+
+    size_t GetGeometryCount() const { return m_geometries.size(); }
+    size_t GetPointCount() const {
+        size_t pointCount = 0;
+        for (auto const & points : m_geometries) {
+            pointCount += points.size();
+        }
+        return pointCount;
+    }
+    float GetBaseWidth() const { return m_width; }
+    float GetBaseDepth() const { return GetDepth(0); }
+    char const * GetDepthLayerName() const {
+        return m_depthLayer == df::DepthLayer::UserLineLayer ? "UserLineLayer" : "Other";
+    }
+
+private:
+    std::vector<std::vector<m2::PointD>> m_geometries;
+    float m_width = 4.0f;
+    int m_minZoom;
+    int m_zIndex;
+    kml::MarkGroupId m_groupId;
+    dp::Color m_color;
+    df::DepthLayer m_depthLayer;
+    mutable bool m_dirty = true;
+};
+
+class DuckDBMarksProvider final : public df::UserMarksProvider {
+public:
+    DuckDBMarksProvider() {
+        m_allGroups.insert(kDuckDBRenderGroupId);
+        m_allGroups.insert(kDuckDBEditGroupId);
+    }
+
+    void SetFeatures(std::vector<DuckDBRenderableGeometry> const & features) {
+        auto const previousPointIds = m_pointIds;
+        auto const previousLineIds = m_lineIds;
+        m_pointMarks.clear();
+        m_lineMarks.clear();
+        m_pointIds.clear();
+        m_lineIds.clear();
+        m_createdPointIds.clear();
+        m_createdLineIds.clear();
+        m_updatedPointIds.clear();
+        m_updatedLineIds.clear();
+        m_updatedGroups.clear();
+        m_updatedGroups.insert(kDuckDBRenderGroupId);
+        if (m_editVisible) {
+            m_updatedGroups.insert(kDuckDBEditGroupId);
+        }
+
+        size_t pointIndex = 0;
+        size_t lineIndex = 0;
+        for (auto const & feature : features) {
+            if (feature.isPoint && !feature.points.empty()) {
+                auto const id = kDuckDBPointMarkIdBase + pointIndex++;
+                m_pointIds.insert(id);
+                m_createdPointIds.insert(id);
+                m_pointMarks.emplace(id, std::make_unique<DuckDBPointMark>(
+                    id, feature.points.front(), feature.minZoom, feature.zIndex));
+            } else if (feature.points.size() > 1) {
+                auto const id = kDuckDBLineMarkIdBase + lineIndex++;
+                m_lineIds.insert(id);
+                m_createdLineIds.insert(id);
+                m_lineMarks.emplace(id, std::make_unique<DuckDBLineMark>(
+                    id, feature.points, feature.minZoom, feature.zIndex));
+            }
+        }
+
+        AssignSetDifference(m_pointIds, previousPointIds, m_createdPointIds);
+        AssignSetDifference(previousPointIds, m_pointIds, m_removedPointIds);
+        AssignSetDifference(m_lineIds, previousLineIds, m_createdLineIds);
+        AssignSetDifference(previousLineIds, m_lineIds, m_removedLineIds);
+
+        m_updatedPointIds = m_pointIds;
+        m_updatedLineIds = m_lineIds;
+    }
+
+    void SetEditHandles(
+        std::vector<std::vector<m2::PointD>> const & geometries,
+        int32_t interactionMode,
+        DuckDBInteractionLineStyle const & lineStyle) {
+        auto const previousEditPointIds = m_editCombinedPointIds;
+        auto const previousEditLineIds = m_editLineIds;
+        bool const wasEditVisible = m_editVisible;
+        m_editPointMarks.clear();
+        m_editLineMarks.clear();
+        m_editPointIds.clear();
+        m_editCombinedPointIds.clear();
+        m_editLineIds.clear();
+        m_createdPointIds.clear();
+        m_createdLineIds.clear();
+        m_updatedPointIds.clear();
+        m_updatedLineIds.clear();
+        m_removedPointIds.clear();
+        m_removedLineIds.clear();
+        m_updatedGroups.clear();
+        m_becameVisibleGroups.clear();
+        m_becameInvisibleGroups.clear();
+        m_updatedGroups.insert(kDuckDBEditGroupId);
+        m_interactionMode = interactionMode;
+        m_editVisible = m_interactionMode != kDuckDBInteractionInactive && !geometries.empty();
+        if (!wasEditVisible && m_editVisible) {
+            m_becameVisibleGroups.insert(kDuckDBEditGroupId);
+        } else if (wasEditVisible && !m_editVisible) {
+            m_becameInvisibleGroups.insert(kDuckDBEditGroupId);
+        }
+        auto const color = m_interactionMode == kDuckDBInteractionDrawing
+            ? dp::Color(0, 200, 120, 255)
+            : dp::Color(255, 149, 0, 255);
+
+        size_t pointIndex = 0;
+        size_t lineIndex = 0;
+        for (auto const & points : geometries) {
+            for (auto const & point : points) {
+                auto const id = kDuckDBEditPointMarkIdBase + pointIndex++;
+                m_editPointIds.insert(id);
+                m_createdPointIds.insert(id);
+                m_updatedPointIds.insert(id);
+                m_editPointMarks.emplace(id, std::make_unique<DuckDBPointMark>(
+                    id, point, 1, 65535, kDuckDBEditGroupId,
+                    color, 8.0f));
+            }
+            if (points.size() > 1) {
+                auto const id = kDuckDBEditLineMarkIdBase + lineIndex++;
+                m_editLineIds.insert(id);
+                m_createdLineIds.insert(id);
+                m_updatedLineIds.insert(id);
+                m_editLineMarks.emplace(id, std::make_unique<DuckDBLineMark>(
+                    id, BuildInteractionLineGeometries(points, lineStyle),
+                    1, 65535, kDuckDBEditGroupId, lineStyle));
+            }
+        }
+
+        m_editCombinedPointIds.insert(m_editPointIds.begin(), m_editPointIds.end());
+
+        AssignSetDifference(m_editCombinedPointIds, previousEditPointIds, m_createdPointIds);
+        AssignSetDifference(previousEditPointIds, m_editCombinedPointIds, m_removedPointIds);
+        AssignSetDifference(m_editLineIds, previousEditLineIds, m_createdLineIds);
+        AssignSetDifference(previousEditLineIds, m_editLineIds, m_removedLineIds);
+
+        m_updatedPointIds = m_editCombinedPointIds;
+        m_updatedLineIds = m_editLineIds;
+    }
+
+    size_t GetCommittedPointMarkCount() const { return m_pointIds.size(); }
+    size_t GetCommittedLineMarkCount() const { return m_lineIds.size(); }
+    size_t GetInteractionPointMarkCount() const { return m_editPointIds.size(); }
+    size_t GetInteractionLineMarkCount() const { return m_editLineIds.size(); }
+    size_t GetInteractionLineGeometryCount() const {
+        size_t geometryCount = 0;
+        for (auto const & entry : m_editLineMarks) {
+            geometryCount += entry.second->GetGeometryCount();
+        }
+        return geometryCount;
+    }
+    size_t GetInteractionLinePointCount() const {
+        size_t pointCount = 0;
+        for (auto const & entry : m_editLineMarks) {
+            pointCount += entry.second->GetPointCount();
+        }
+        return pointCount;
+    }
+    float GetInteractionLineBaseWidth() const {
+        if (m_editLineMarks.empty()) {
+            return 0.0f;
+        }
+        return m_editLineMarks.begin()->second->GetBaseWidth();
+    }
+    float GetInteractionLineBaseDepth() const {
+        if (m_editLineMarks.empty()) {
+            return 0.0f;
+        }
+        return m_editLineMarks.begin()->second->GetBaseDepth();
+    }
+    char const * GetInteractionLineDepthLayerName() const {
+        if (m_editLineMarks.empty()) {
+            return "none";
+        }
+        return m_editLineMarks.begin()->second->GetDepthLayerName();
+    }
+
+    kml::GroupIdSet GetAllGroupIds() const override { return m_allGroups; }
+    kml::GroupIdSet const & GetUpdatedGroupIds() const override { return m_updatedGroups; }
+    kml::GroupIdSet const & GetRemovedGroupIds() const override { return m_emptyGroups; }
+    kml::GroupIdSet const & GetBecameVisibleGroupIds() const override { return m_becameVisibleGroups; }
+    kml::GroupIdSet const & GetBecameInvisibleGroupIds() const override { return m_becameInvisibleGroups; }
+    kml::MarkIdSet const & GetCreatedMarkIds() const override { return m_createdPointIds; }
+    kml::MarkIdSet const & GetRemovedMarkIds() const override { return m_removedPointIds; }
+    kml::MarkIdSet const & GetUpdatedMarkIds() const override { return m_updatedPointIds; }
+    kml::TrackIdSet const & GetCreatedLineIds() const override { return m_createdLineIds; }
+    kml::TrackIdSet const & GetRemovedLineIds() const override { return m_removedLineIds; }
+    kml::TrackIdSet const & GetUpdatedLineIds() const override { return m_updatedLineIds; }
+    kml::MarkIdSet const & GetGroupPointIds(kml::MarkGroupId groupId) const override {
+        if (groupId == kDuckDBRenderGroupId) return m_pointIds;
+        if (groupId == kDuckDBEditGroupId) return m_editCombinedPointIds;
+        return m_emptyPointIds;
+    }
+    df::UserPointMark const * GetUserPointMark(kml::MarkId markId) const override {
+        auto const found = m_pointMarks.find(markId);
+        if (found != m_pointMarks.end()) return found->second.get();
+        auto const editFound = m_editPointMarks.find(markId);
+        if (editFound != m_editPointMarks.end()) return editFound->second.get();
+        return nullptr;
+    }
+    kml::TrackIdSet const & GetGroupLineIds(kml::MarkGroupId groupId) const override {
+        if (groupId == kDuckDBRenderGroupId) return m_lineIds;
+        if (groupId == kDuckDBEditGroupId) return m_editLineIds;
+        return m_emptyLineIds;
+    }
+    df::UserLineMark const * GetUserLineMark(kml::TrackId lineId) const override {
+        auto const found = m_lineMarks.find(lineId);
+        if (found != m_lineMarks.end()) return found->second.get();
+        auto const editFound = m_editLineMarks.find(lineId);
+        return editFound == m_editLineMarks.end() ? nullptr : editFound->second.get();
+    }
+    bool IsGroupVisible(kml::MarkGroupId groupId) const override {
+        return groupId == kDuckDBRenderGroupId ||
+               (groupId == kDuckDBEditGroupId && m_editVisible);
+    }
+
+private:
+    kml::GroupIdSet m_allGroups;
+    kml::GroupIdSet m_updatedGroups;
+    kml::GroupIdSet m_emptyGroups;
+    kml::GroupIdSet m_becameVisibleGroups;
+    kml::GroupIdSet m_becameInvisibleGroups;
+    kml::MarkIdSet m_pointIds;
+    kml::MarkIdSet m_editPointIds;
+    kml::MarkIdSet m_editCombinedPointIds;
+    kml::MarkIdSet m_emptyPointIds;
+    kml::TrackIdSet m_lineIds;
+    kml::TrackIdSet m_editLineIds;
+    kml::TrackIdSet m_emptyLineIds;
+    kml::MarkIdSet m_createdPointIds;
+    kml::MarkIdSet m_removedPointIds;
+    kml::MarkIdSet m_updatedPointIds;
+    kml::TrackIdSet m_createdLineIds;
+    kml::TrackIdSet m_removedLineIds;
+    kml::TrackIdSet m_updatedLineIds;
+    std::map<kml::MarkId, std::unique_ptr<DuckDBPointMark>> m_pointMarks;
+    std::map<kml::MarkId, std::unique_ptr<DuckDBPointMark>> m_editPointMarks;
+    std::map<kml::TrackId, std::unique_ptr<DuckDBLineMark>> m_lineMarks;
+    std::map<kml::TrackId, std::unique_ptr<DuckDBLineMark>> m_editLineMarks;
+    int32_t m_interactionMode = kDuckDBInteractionInactive;
+    bool m_editVisible = false;
+};
+
+std::mutex g_duckDBRenderMutex;
+std::unique_ptr<DuckDBMarksProvider> g_duckDBMarksProvider;
+bool g_duckDBRenderingEnabled = false;
+bool g_duckDBMarksPublished = false;
+std::vector<DuckDBRenderableGeometry> g_lastDuckDBRenderableFeatures;
+std::chrono::steady_clock::time_point g_lastDuckDBRenderRefresh;
+std::set<std::string> g_duckDBCommittedDrapeLineIds;
+std::set<std::string> g_duckDBInteractionDrapeLineIds;
+std::atomic<uint64_t> g_duckDBViewportGeneration{0};
+std::atomic<bool> g_duckDBViewportRefreshScheduled{false};
+std::mutex g_viewportMutex;
+std::unique_ptr<ScreenBase> g_currentScreen;
+std::mutex g_mapPointerMutex;
+
+struct AgusMapPointerState {
+    double physicalX = 0.0;
+    double physicalY = 0.0;
+    double lat = 0.0;
+    double lon = 0.0;
+    bool insideMap = false;
+    bool hasCoordinate = false;
+};
+
+AgusMapPointerState g_lastMapPointer;
+
+std::vector<std::vector<m2::PointD>> BuildInteractionLineGeometries(
+    std::vector<m2::PointD> const & points,
+    DuckDBInteractionLineStyle const & style) {
+    if (points.size() < 2) {
+        return {};
+    }
+    if (!style.dashed) {
+        return {points};
+    }
+
+    ScreenBase screen;
+    {
+        std::lock_guard<std::mutex> lock(g_viewportMutex);
+        if (!g_currentScreen) {
+            return {points};
+        }
+        screen = *g_currentScreen;
+    }
+
+    double const dashLength = std::max(1.0, style.dashLength);
+    double const gapLength = std::max(1.0, style.gapLength);
+    double const cycleLength = dashLength + gapLength;
+    std::vector<std::vector<m2::PointD>> dashes;
+    for (size_t segmentIndex = 1; segmentIndex < points.size(); ++segmentIndex) {
+        auto const & start = points[segmentIndex - 1];
+        auto const & end = points[segmentIndex];
+        auto const startPx = screen.GtoP(start);
+        auto const endPx = screen.GtoP(end);
+        double const lengthPx = std::hypot(endPx.x - startPx.x, endPx.y - startPx.y);
+        if (lengthPx <= 0.0) {
+            continue;
+        }
+        for (double offsetPx = 0.0; offsetPx < lengthPx; offsetPx += cycleLength) {
+            double const dashEndPx = std::min(lengthPx, offsetPx + dashLength);
+            if (dashEndPx <= offsetPx) {
+                continue;
+            }
+            double const startT = offsetPx / lengthPx;
+            double const endT = dashEndPx / lengthPx;
+            dashes.push_back({
+                m2::PointD(
+                    start.x + ((end.x - start.x) * startT),
+                    start.y + ((end.y - start.y) * startT)),
+                m2::PointD(
+                    start.x + ((end.x - start.x) * endT),
+                    start.y + ((end.y - start.y) * endT)),
+            });
+        }
+    }
+    return dashes.empty() ? std::vector<std::vector<m2::PointD>>{points} : dashes;
+}
+
+void UpdateDuckDBDrapeApiLines(
+    std::set<std::string> & activeIds,
+    std::vector<std::vector<m2::PointD>> const & lineGeometries,
+    std::string const & idPrefix,
+    dp::Color color,
+    float width,
+    bool dashed,
+    double dashLength,
+    double gapLength) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+
+    std::set<std::string> nextIds;
+    size_t lineIndex = 0;
+    for (auto const & points : lineGeometries) {
+        std::vector<std::vector<m2::PointD>> renderGeometries;
+        if (dashed) {
+            DuckDBInteractionLineStyle dashStyle;
+            dashStyle.dashed = true;
+            dashStyle.dashLength = dashLength;
+            dashStyle.gapLength = gapLength;
+            renderGeometries = BuildInteractionLineGeometries(points, dashStyle);
+        } else {
+            renderGeometries = points.size() > 1
+                ? std::vector<std::vector<m2::PointD>>{points}
+                : std::vector<std::vector<m2::PointD>>{};
+        }
+        size_t segmentIndex = 0;
+        for (auto const & renderPoints : renderGeometries) {
+            if (renderPoints.size() < 2) {
+                continue;
+            }
+            auto const id = idPrefix + "-" + std::to_string(lineIndex) +
+                "-" + std::to_string(segmentIndex++);
+            nextIds.insert(id);
+            g_framework->GetDrapeApi().AddLine(
+                id,
+                df::DrapeApiLineData(renderPoints, color).Width(width));
+        }
+        ++lineIndex;
+    }
+
+    for (auto const & oldId : activeIds) {
+        if (nextIds.count(oldId) == 0) {
+            g_framework->GetDrapeApi().RemoveLine(oldId);
+        }
+    }
+    activeIds = std::move(nextIds);
+}
+
+void ClearDuckDBDrapeApiLines(std::set<std::string> & activeIds) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        activeIds.clear();
+        return;
+    }
+    for (auto const & id : activeIds) {
+        g_framework->GetDrapeApi().RemoveLine(id);
+    }
+    activeIds.clear();
+}
+
+std::vector<m2::PointD> ParseWktMercatorPoints(char const * wkt) {
+    std::vector<m2::PointD> points;
+    if (wkt == nullptr) {
+        return points;
+    }
+
+    char const * cursor = wkt;
+    while (*cursor != '\0') {
+        char * numberEnd = nullptr;
+        double const lon = std::strtod(cursor, &numberEnd);
+        if (numberEnd == cursor) {
+            ++cursor;
+            continue;
+        }
+        cursor = numberEnd;
+
+        double const lat = std::strtod(cursor, &numberEnd);
+        if (numberEnd == cursor) {
+            break;
+        }
+        cursor = numberEnd;
+        points.push_back(mercator::FromLatLon(lat, lon));
+    }
+    return points;
+}
+
+std::vector<std::vector<m2::PointD>> ParseWktMercatorGeometries(char const * wkt) {
+    std::vector<std::vector<m2::PointD>> geometries;
+    if (wkt == nullptr) {
+        return geometries;
+    }
+
+    std::string_view const text(wkt);
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = text.find('\n', start);
+        if (end == std::string_view::npos) {
+            end = text.size();
+        }
+
+        auto const chunk = text.substr(start, end - start);
+        if (!chunk.empty()) {
+            std::string geometry(chunk);
+            auto points = ParseWktMercatorPoints(geometry.c_str());
+            if (!points.empty()) {
+                geometries.push_back(std::move(points));
+            }
+        }
+
+        start = end + 1;
+    }
+
+    return geometries;
+}
+
+bool IsPointFeature(char const * geometryKind, char const * wkt) {
+    std::string_view const kind = geometryKind == nullptr ? std::string_view() : std::string_view(geometryKind);
+    if (kind == "point") {
+        return true;
+    }
+    std::string_view const text = wkt == nullptr ? std::string_view() : std::string_view(wkt);
+    return text.rfind("POINT", 0) == 0;
+}
+
+int ClampZoom(int zoom) {
+    if (zoom < 1) {
+        return 1;
+    }
+    if (zoom > scales::UPPER_STYLE_SCALE) {
+        return scales::UPPER_STYLE_SCALE;
+    }
+    return zoom;
+}
+
+DuckDBRenderViewport GetDuckDBRenderViewport() {
+    auto const latLonRect = mercator::ToLatLon(g_framework->GetCurrentViewport());
+    return {
+        std::min(latLonRect.minY(), latLonRect.maxY()),
+        std::min(latLonRect.minX(), latLonRect.maxX()),
+        std::max(latLonRect.minY(), latLonRect.maxY()),
+        std::max(latLonRect.minX(), latLonRect.maxX()),
+    };
+}
+
+int32_t RefreshDuckDBRenderLayersInternal() {
+    std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+    if (!g_framework || !g_drapeEngineCreated || agus_duckdb_is_open() == 0) {
+        return -1;
+    }
+
+    auto engine = g_framework->GetDrapeEngine();
+    if (!engine) {
+        return -1;
+    }
+
+    auto const viewport = GetDuckDBRenderViewport();
+    auto const zoom = ClampZoom(g_framework->GetDrawScale());
+    std::vector<DuckDBRenderableGeometry> renderableFeatures;
+    renderableFeatures.reserve(kDuckDBRenderFetchBatchSize);
+
+    int32_t queryOffset = 0;
+    while (queryOffset < kDuckDBRenderFetchMaxFeatures) {
+        int32_t const batchLimit =
+            std::min(kDuckDBRenderFetchBatchSize,
+                     kDuckDBRenderFetchMaxFeatures - queryOffset);
+        AgusDuckDBRenderFeature * features = nullptr;
+        int32_t featureCount = 0;
+        if (agus_duckdb_copy_render_features_page(
+                viewport.minLon, viewport.minLat, viewport.maxLon, viewport.maxLat,
+                zoom, batchLimit, queryOffset, &features, &featureCount) == 0) {
+            return -2;
+        }
+
+        for (int32_t index = 0; index < featureCount; ++index) {
+            auto const & feature = features[index];
+            DuckDBRenderableGeometry renderable;
+            renderable.isPoint = IsPointFeature(feature.geometry_kind, feature.geometry_wkt);
+            renderable.minZoom = feature.min_zoom <= 0 ? 1 : feature.min_zoom;
+            renderable.zIndex = feature.z_index;
+            renderable.points = ParseWktMercatorPoints(feature.geometry_wkt);
+            if ((renderable.isPoint && !renderable.points.empty()) ||
+                (!renderable.isPoint && renderable.points.size() > 1)) {
+                renderableFeatures.push_back(std::move(renderable));
+            }
+        }
+
+        agus_duckdb_free_render_features(features, featureCount);
+        queryOffset += featureCount;
+        if (featureCount < batchLimit) {
+            break;
+        }
+    }
+
+    if (g_duckDBMarksPublished &&
+        AreDuckDBRenderableFeaturesEqual(
+            renderableFeatures,
+            g_lastDuckDBRenderableFeatures)) {
+        g_lastDuckDBRenderRefresh = std::chrono::steady_clock::now();
+        return static_cast<int32_t>(renderableFeatures.size());
+    }
+
+    if (!g_duckDBMarksProvider) {
+        g_duckDBMarksProvider = std::make_unique<DuckDBMarksProvider>();
+    }
+    g_duckDBMarksProvider->SetFeatures(renderableFeatures);
+    std::vector<std::vector<m2::PointD>> committedLineGeometries;
+    for (auto const & feature : renderableFeatures) {
+        if (!feature.isPoint && feature.points.size() > 1) {
+            committedLineGeometries.push_back(feature.points);
+        }
+    }
+    UpdateDuckDBDrapeApiLines(
+        g_duckDBCommittedDrapeLineIds,
+        committedLineGeometries,
+        "duckdb-committed",
+        dp::Color(71, 85, 105, 150),
+        2.0f,
+        false,
+        10.0,
+        6.0);
+    __android_log_print(
+        ANDROID_LOG_DEBUG,
+        "AgusMapsFlutterNative",
+        "DuckDB committed render geometry: features=%zu pointMarks=%zu lineMarks=%zu drapeApiLines=%zu renderer=DrapeApiLineData baseWidth=2.00 depthTest=0 style=existing-visible",
+        renderableFeatures.size(),
+        g_duckDBMarksProvider->GetCommittedPointMarkCount(),
+        g_duckDBMarksProvider->GetCommittedLineMarkCount(),
+        g_duckDBCommittedDrapeLineIds.size());
+
+    bool const firstUpdate = !g_duckDBMarksPublished;
+    engine->UpdateUserMarks(g_duckDBMarksProvider.get(), firstUpdate);
+    g_duckDBMarksPublished = true;
+    engine->ChangeVisibilityUserMarksGroup(kDuckDBRenderGroupId, true);
+    engine->InvalidateUserMarks();
+    g_lastDuckDBRenderableFeatures = renderableFeatures;
+    g_lastDuckDBRenderRefresh = std::chrono::steady_clock::now();
+    WakeRenderer();
+    return static_cast<int32_t>(renderableFeatures.size());
+}
+
+void UpdateDuckDBEditHandlesInternal(
+    char const * wkt,
+    int32_t interactionMode,
+    DuckDBInteractionLineStyle const & lineStyle = DuckDBInteractionLineStyle()) {
+    std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    auto engine = g_framework->GetDrapeEngine();
+    if (!engine) {
+        return;
+    }
+
+    if (!g_duckDBMarksProvider) {
+        g_duckDBMarksProvider = std::make_unique<DuckDBMarksProvider>();
+    }
+    auto const geometries = ParseWktMercatorGeometries(wkt);
+    size_t pointCount = 0;
+    size_t lineCount = 0;
+    for (auto const & points : geometries) {
+        pointCount += points.size();
+        if (points.size() > 1) {
+            ++lineCount;
+        }
+    }
+    g_duckDBMarksProvider->SetEditHandles(
+        geometries, interactionMode, lineStyle);
+    UpdateDuckDBDrapeApiLines(
+        g_duckDBInteractionDrapeLineIds,
+        geometries,
+        "duckdb-interaction",
+        lineStyle.color,
+        lineStyle.width,
+        lineStyle.dashed,
+        lineStyle.dashLength,
+        lineStyle.gapLength);
+    __android_log_print(
+        ANDROID_LOG_DEBUG,
+        "AgusMapsFlutterNative",
+        "DuckDB interaction geometry: mode=%d geometries=%zu points=%zu lines=%zu lineMarks=%zu drapeApiLines=%zu renderer=DrapeApiLineData depthTest=0 lineGeometries=%zu linePoints=%zu depth=%s baseWidth=%.2f baseDepth=%.2f lineWidth=%.2f opacity=%u dashed=%d",
+        interactionMode,
+        geometries.size(),
+        pointCount,
+        lineCount,
+        g_duckDBMarksProvider->GetInteractionLineMarkCount(),
+        g_duckDBInteractionDrapeLineIds.size(),
+        g_duckDBMarksProvider->GetInteractionLineGeometryCount(),
+        g_duckDBMarksProvider->GetInteractionLinePointCount(),
+        g_duckDBMarksProvider->GetInteractionLineDepthLayerName(),
+        g_duckDBMarksProvider->GetInteractionLineBaseWidth(),
+        g_duckDBMarksProvider->GetInteractionLineBaseDepth(),
+        lineStyle.width,
+        lineStyle.color.GetAlpha(),
+        lineStyle.dashed ? 1 : 0);
+    engine->UpdateUserMarks(g_duckDBMarksProvider.get(), true);
+    engine->ChangeVisibilityUserMarksGroup(
+        kDuckDBEditGroupId,
+        interactionMode != kDuckDBInteractionInactive && !geometries.empty());
+    engine->InvalidateUserMarks();
+    WakeRenderer();
+}
+
+void ClearDuckDBEditHandlesInternal() {
+    ClearDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds);
+    UpdateDuckDBEditHandlesInternal(nullptr, kDuckDBInteractionInactive);
+}
+
+bool ShouldRefreshDuckDBRenderOnViewportChange() {
+    std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+    if (!g_duckDBRenderingEnabled) {
+        return false;
+    }
+    auto const now = std::chrono::steady_clock::now();
+    return now - g_lastDuckDBRenderRefresh >= kDuckDBViewportRefreshInterval;
+}
+
+void ScheduleDuckDBRenderRefreshAfterViewportIdle() {
+    {
+        std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+        if (!g_duckDBRenderingEnabled) {
+            return;
+        }
+    }
+
+    g_duckDBViewportGeneration.fetch_add(1, std::memory_order_relaxed);
+    bool expected = false;
+    if (!g_duckDBViewportRefreshScheduled.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    std::thread([]() {
+        while (true) {
+            auto const observedGeneration =
+                g_duckDBViewportGeneration.load(std::memory_order_relaxed);
+            std::this_thread::sleep_for(kDuckDBViewportIdleRefreshDelay);
+            if (observedGeneration ==
+                g_duckDBViewportGeneration.load(std::memory_order_relaxed)) {
+                break;
+            }
+        }
+
+        g_duckDBViewportRefreshScheduled.store(false, std::memory_order_release);
+        if (ShouldRefreshDuckDBRenderOnViewportChange()) {
+            RefreshDuckDBRenderLayersInternal();
+        }
+    }).detach();
+}
+
+double NormalizeBearingDegrees(double degrees) {
+    double normalized = std::fmod(degrees, 360.0);
+    if (normalized < 0.0) {
+        normalized += 360.0;
+    }
+    return normalized >= 359.999 ? 0.0 : normalized;
+}
+
+bool IsOutdoorsStyle(MapStyle style) {
+    return style == MapStyleOutdoorsLight || style == MapStyleOutdoorsDark;
+}
+
+void ApplyRuntimeMapStyle(MapStyle mapStyle) {
+    if (!g_framework || mapStyle == MapStyleMerged) {
+        return;
+    }
+    GetStyleReader().SetCurrentStyle(mapStyle);
+    if (auto engine = g_framework->GetDrapeEngine()) {
+        engine->UpdateMapStyle();
+    }
+}
+
+void WakeRenderer() {
+    if (!g_framework) {
+        return;
+    }
+    g_framework->InvalidateRendering();
+    g_framework->InvalidateRect(g_framework->GetCurrentViewport());
+    if (g_drapeEngineCreated) {
+        g_framework->MakeFrameActive();
+    }
+}
+
+void KeepCameraFrameActive() {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_framework->MakeFrameActive();
+}
+
+void SetViewportTracking() {
+    if (!g_framework) {
+        return;
+    }
+    g_framework->SetViewportListener([](ScreenBase const & screen) {
+        g_currentBearingDegrees = NormalizeBearingDegrees(
+            screen.GetAngle() * kDegreesPerRadian);
+        {
+            std::lock_guard<std::mutex> lock(g_viewportMutex);
+            g_currentScreen = std::make_unique<ScreenBase>(screen);
+        }
+        ScheduleDuckDBRenderRefreshAfterViewportIdle();
+    });
+}
+
+void SetOutdoorsEnabledInternal(bool enabled) {
+    if (!g_framework) {
+        return;
+    }
+
+    g_outdoorsEnabled = enabled;
+    auto const currentStyle = g_framework->GetMapStyle();
+    bool const dark = MapStyleIsDark(currentStyle);
+
+    if (enabled) {
+        ApplyRuntimeMapStyle(dark ? MapStyleOutdoorsDark : MapStyleOutdoorsLight);
+    } else if (IsOutdoorsStyle(currentStyle)) {
+        ApplyRuntimeMapStyle(dark ? MapStyleDefaultDark : MapStyleDefaultLight);
+    }
+}
+
+void SetIsolinesEnabledInternal(bool enabled) {
+    if (!g_framework) {
+        return;
+    }
+    g_isolinesEnabled = enabled;
+    g_framework->GetIsolinesManager().SetEnabled(enabled);
+}
+
+void SetSubwayEnabledInternal(bool enabled) {
+    if (!g_framework) {
+        return;
+    }
+    if (enabled) {
+        SetOutdoorsEnabledInternal(false);
+        SetIsolinesEnabledInternal(false);
+    }
+    g_subwayEnabled = enabled;
+    g_framework->GetTransitManager().EnableTransitSchemeMode(enabled);
+}
+}  // namespace
+
+static bool IsMapAlreadyRegistered(std::string const & countryName, int64_t requestedVersion) {
+    if (!g_framework) {
+        return false;
+    }
+
+    auto const & dataSource = g_framework->GetDataSource();
+    std::vector<std::shared_ptr<MwmInfo>> mwms;
+    dataSource.GetMwmsInfo(mwms);
+
+    for (auto const & info : mwms) {
+        if (!info || info->GetCountryName() != countryName) {
+            continue;
+        }
+
+        int64_t const registeredVersion =
+            static_cast<int64_t>(info->GetVersion());
+        if (requestedVersion == 0 || requestedVersion == registeredVersion ||
+            countryName == "World" || countryName == "WorldCoasts") {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 static char* CopyString(std::string const & value) {
     const size_t size = value.size();
@@ -671,7 +1687,6 @@ FFI_PLUGIN_EXPORT void comaps_set_locale(const char* localeTag) {
 static int g_surfaceWidth = 0;
 static int g_surfaceHeight = 0;
 static float g_density = 2.0f;
-static bool g_drapeEngineCreated = false;
 
 // Frame notification timing for 60fps rate limiting (Option 2)
 static std::chrono::steady_clock::time_point g_lastFrameNotification;
@@ -823,6 +1838,7 @@ Java_app_agus_maps_agus_1maps_1flutter_AgusMapsFlutterPlugin_nativeSetSurface(
         
         // Create framework, defer map loading
         g_framework = std::make_unique<Framework>(params, false /* loadMaps */);
+        SetViewportTracking();
         
         __android_log_print(ANDROID_LOG_DEBUG, "AgusMapsFlutterNative", "nativeSetSurface: Framework created");
         
@@ -974,6 +1990,79 @@ Java_app_agus_maps_agus_1maps_1flutter_AgusMapsFlutterPlugin_nativeClearPlacePag
     comaps_place_page_clear_selection();
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_app_agus_maps_agus_1maps_1flutter_AgusMapsFlutterPlugin_nativeUpdateMapPointer(
+    JNIEnv* env,
+    jobject thiz,
+    jdouble physicalX,
+    jdouble physicalY,
+    jint insideMap,
+    jdoubleArray latLon) {
+    (void)thiz;
+    if (!latLon || env->GetArrayLength(latLon) < 2) {
+        return 0;
+    }
+
+    double lat = 0.0;
+    double lon = 0.0;
+    int const result = comaps_update_map_pointer(
+        physicalX, physicalY, insideMap, &lat, &lon);
+    if (result != 1) {
+        return 0;
+    }
+
+    jdouble values[2] = {lat, lon};
+    env->SetDoubleArrayRegion(latLon, 0, 2, values);
+    return 1;
+}
+
+extern "C" void agus_duckdb_update_interaction_geometry(
+    int32_t interactionMode,
+    char const * geometryWkt,
+    int32_t red,
+    int32_t green,
+    int32_t blue,
+    double opacity,
+    double width,
+    int32_t dashed,
+    double dashLength,
+    double gapLength);
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_agus_maps_agus_1maps_1flutter_AgusMapsFlutterPlugin_nativeUpdateDrapeInteractionGeometry(
+    JNIEnv* env,
+    jobject thiz,
+    jint mode,
+    jstring geometryWkt,
+    jint red,
+    jint green,
+    jint blue,
+    jdouble opacity,
+    jdouble width,
+    jint dashed,
+    jdouble dashLength,
+    jdouble gapLength) {
+    (void)thiz;
+    char const * geometryChars = nullptr;
+    if (geometryWkt) {
+        geometryChars = env->GetStringUTFChars(geometryWkt, nullptr);
+    }
+    agus_duckdb_update_interaction_geometry(
+        mode,
+        geometryChars,
+        red,
+        green,
+        blue,
+        opacity,
+        width,
+        dashed,
+        dashLength,
+        gapLength);
+    if (geometryWkt && geometryChars) {
+        env->ReleaseStringUTFChars(geometryWkt, geometryChars);
+    }
+}
+
 FFI_PLUGIN_EXPORT void comaps_set_view(double lat, double lon, int zoom) {
      __android_log_print(ANDROID_LOG_DEBUG, "AgusMapsFlutterNative", "comaps_set_view: lat=%f, lon=%f, zoom=%d", lat, lon, zoom);
      if (g_framework) {
@@ -981,6 +2070,413 @@ FFI_PLUGIN_EXPORT void comaps_set_view(double lat, double lon, int zoom) {
          // Force invalidate to ensure tiles reload
          g_framework->InvalidateRect(g_framework->GetCurrentViewport());
      }
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_viewport_center(double* lat, double* lon) {
+    if (!g_framework || !lat || !lon) {
+        return 0;
+    }
+    auto const ll = mercator::ToLatLon(g_framework->GetViewportCenter());
+    *lat = ll.m_lat;
+    *lon = ll.m_lon;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void) {
+    if (!g_framework) {
+        return -1;
+    }
+    return g_framework->GetDrawScale();
+}
+
+FFI_PLUGIN_EXPORT int comaps_screen_to_latlon(
+    double physical_x,
+    double physical_y,
+    double* lat,
+    double* lon) {
+    if (!lat || !lon) {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(g_viewportMutex);
+    if (!g_currentScreen) {
+        return 0;
+    }
+
+    auto const mercatorPoint = g_currentScreen->PtoG(
+        m2::PointD(physical_x, physical_y));
+    auto const coordinate = mercator::ToLatLon(mercatorPoint);
+    *lat = coordinate.m_lat;
+    *lon = coordinate.m_lon;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT int comaps_update_map_pointer(
+    double physical_x,
+    double physical_y,
+    int inside_map,
+    double* lat,
+    double* lon) {
+    if (!lat || !lon) {
+        return 0;
+    }
+
+    bool hasCoordinate = false;
+    double projectedLat = 0.0;
+    double projectedLon = 0.0;
+    if (inside_map != 0) {
+        std::lock_guard<std::mutex> viewportLock(g_viewportMutex);
+        if (g_currentScreen) {
+            auto const mercatorPoint = g_currentScreen->PtoG(
+                m2::PointD(physical_x, physical_y));
+            auto const coordinate = mercator::ToLatLon(mercatorPoint);
+            projectedLat = coordinate.m_lat;
+            projectedLon = coordinate.m_lon;
+            hasCoordinate = true;
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> pointerLock(g_mapPointerMutex);
+        g_lastMapPointer.physicalX = physical_x;
+        g_lastMapPointer.physicalY = physical_y;
+        g_lastMapPointer.lat = projectedLat;
+        g_lastMapPointer.lon = projectedLon;
+        g_lastMapPointer.insideMap = inside_map != 0;
+        g_lastMapPointer.hasCoordinate = hasCoordinate;
+    }
+
+    if (!hasCoordinate) {
+        return 0;
+    }
+    *lat = projectedLat;
+    *lon = projectedLon;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT int comaps_latlon_to_screen(
+    double lat,
+    double lon,
+    double* physical_x,
+    double* physical_y) {
+    if (!physical_x || !physical_y) {
+        return 0;
+    }
+
+    std::lock_guard<std::mutex> lock(g_viewportMutex);
+    if (!g_currentScreen) {
+        return 0;
+    }
+
+    auto const screenPoint = g_currentScreen->GtoP(
+        mercator::FromLatLon(lat, lon));
+    *physical_x = screenPoint.x;
+    *physical_y = screenPoint.y;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT void comaps_zoom_in(int animated) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_framework->Scale(Framework::SCALE_MAG_LIGHT, animated != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_zoom_out(int animated) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_framework->Scale(Framework::SCALE_MIN_LIGHT, animated != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT double comaps_get_current_bearing(void) {
+    return g_currentBearingDegrees;
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_bearing(double degrees, int animated) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_currentBearingDegrees = NormalizeBearingDegrees(degrees);
+    g_framework->Rotate(g_currentBearingDegrees * kRadiansPerDegree, animated != 0);
+    KeepCameraFrameActive();
+}
+
+FFI_PLUGIN_EXPORT void comaps_reset_bearing(int animated) {
+    comaps_set_bearing(0.0, animated);
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_3d_buildings_enabled(int enabled) {
+    g_3dBuildingsEnabled = enabled != 0;
+    if (!g_framework) {
+        return;
+    }
+    g_framework->Allow3dMode(false, g_3dBuildingsEnabled);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_3d_buildings_enabled(void) {
+    return g_3dBuildingsEnabled ? 1 : 0;
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_map_theme(int dark) {
+    if (!g_framework) {
+        return;
+    }
+    auto const currentStyle = g_framework->GetMapStyle();
+    ApplyRuntimeMapStyle(dark != 0
+        ? GetDarkMapStyleVariant(currentStyle)
+        : GetLightMapStyleVariant(currentStyle));
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_map_theme_is_dark(void) {
+    if (!g_framework) {
+        return 0;
+    }
+    return MapStyleIsDark(g_framework->GetMapStyle()) ? 1 : 0;
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_outdoors_enabled(int enabled) {
+    if (!g_framework) {
+        return;
+    }
+    if (enabled) {
+        SetSubwayEnabledInternal(false);
+    }
+    SetOutdoorsEnabledInternal(enabled != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_isolines_enabled(int enabled) {
+    if (!g_framework) {
+        return;
+    }
+    if (enabled) {
+        SetSubwayEnabledInternal(false);
+    }
+    SetIsolinesEnabledInternal(enabled != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_subway_enabled(int enabled) {
+    SetSubwayEnabledInternal(enabled != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_get_map_layer_state(int* outdoors, int* isolines, int* subway) {
+    if (outdoors) {
+        *outdoors = g_outdoorsEnabled ? 1 : 0;
+    }
+    if (isolines) {
+        *isolines = g_isolinesEnabled ? 1 : 0;
+    }
+    if (subway) {
+        *subway = g_subwayEnabled ? 1 : 0;
+    }
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_map_language(const char* languageCode) {
+    if (!g_framework) {
+        return;
+    }
+    auto engine = g_framework->GetDrapeEngine();
+    if (!engine) {
+        return;
+    }
+    auto languageIndex = localisation::GetMapLanguageIndex();
+    if (languageCode && *languageCode) {
+        auto const requestedIndex =
+            localisation::ConvertLanguageCodeToLanguageIndex(languageCode);
+        if (requestedIndex != localisation::kUnsupportedLanguageIndex) {
+            languageIndex = requestedIndex;
+        }
+    }
+    engine->SetMapLangIndex(languageIndex);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_set_router(int32_t routerType) {
+    auto const result = agus::navigation::SetRouter(g_framework.get(), routerType);
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_router(void) {
+    return agus::navigation::GetRouter(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_add_route_point(
+    int32_t markType, const char* title, const char* subtitle, double lat,
+    double lon, int32_t intermediateIndex, int32_t isMyPosition,
+    int32_t reorderIntermediatePoints) {
+    auto const result = agus::navigation::AddRoutePoint(
+        g_framework.get(), markType, title, subtitle, lat, lon,
+        intermediateIndex, isMyPosition, reorderIntermediatePoints);
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_remove_route_point(
+    int32_t markType, int32_t intermediateIndex) {
+    agus::navigation::RemoveRoutePoint(g_framework.get(), markType, intermediateIndex);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_clear_route_points(void) {
+    agus::navigation::ClearRoutePoints(g_framework.get());
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_build_route(void) {
+    auto const result = agus::navigation::BuildRoute(g_framework.get());
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route(void) {
+    auto const result = agus::navigation::FollowRoute(g_framework.get());
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints) {
+    agus::navigation::CloseRoute(g_framework.get(), removeRoutePoints);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_active(void) {
+    return agus::navigation::IsActive(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_built(void) {
+    return agus::navigation::IsBuilt(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_building(void) {
+    return agus::navigation::IsBuilding(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_following(void) {
+    return agus::navigation::IsFollowing(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT AgusNavigationStatus* comaps_navigation_copy_status(void) {
+    return agus::navigation::CopyStatus(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_status_free(AgusNavigationStatus* status) {
+    agus::navigation::FreeStatus(status);
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_measurement_units(int32_t units) {
+    agus::navigation::SetMeasurementUnits(g_framework.get(), units);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_measurement_units(void) {
+    return agus::navigation::GetMeasurementUnits();
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_turn_notifications_enabled(int32_t enabled) {
+    agus::navigation::SetTurnNotificationsEnabled(g_framework.get(), enabled);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_turn_notifications_enabled(void) {
+    return agus::navigation::GetTurnNotificationsEnabled(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_turn_notifications_locale(const char* locale) {
+    agus::navigation::SetTurnNotificationsLocale(g_framework.get(), locale);
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_speed_camera_mode(int32_t mode) {
+    agus::navigation::SetSpeedCameraMode(g_framework.get(), mode);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_speed_camera_mode(void) {
+    return agus::navigation::GetSpeedCameraMode(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_avoid_routing_options(int32_t mask) {
+    agus::navigation::SetAvoidRoutingOptions(mask);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_avoid_routing_options(void) {
+    return agus::navigation::GetAvoidRoutingOptions();
+}
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_refresh_render_layers(void) {
+    return RefreshDuckDBRenderLayersInternal();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_set_edit_handles_from_wkt(char const * geometryWkt) {
+    UpdateDuckDBEditHandlesInternal(geometryWkt, kDuckDBInteractionEditingFeature);
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_set_interaction_geometry_from_wkt(
+    int32_t interactionMode, char const * geometryWkt) {
+    UpdateDuckDBEditHandlesInternal(geometryWkt, interactionMode);
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_update_interaction_geometry(
+    int32_t interactionMode,
+    char const * geometryWkt,
+    int32_t red,
+    int32_t green,
+    int32_t blue,
+    double opacity,
+    double width,
+    int32_t dashed,
+    double dashLength,
+    double gapLength) {
+    auto const channel = [](int32_t value) -> uint8_t {
+        return static_cast<uint8_t>(std::max(0, std::min(255, value)));
+    };
+    double const clampedOpacity = std::max(0.0, std::min(1.0, opacity));
+    DuckDBInteractionLineStyle style;
+    style.color = dp::Color(
+        channel(red),
+        channel(green),
+        channel(blue),
+        static_cast<uint8_t>(std::round(clampedOpacity * 255.0)));
+    style.width = static_cast<float>(std::max(0.5, std::min(64.0, width)));
+    style.dashed = dashed != 0;
+    style.dashLength = std::max(1.0, dashLength);
+    style.gapLength = std::max(1.0, gapLength);
+    UpdateDuckDBEditHandlesInternal(geometryWkt, interactionMode, style);
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_clear_edit_handles(void) {
+    ClearDuckDBEditHandlesInternal();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_set_rendering_enabled(int32_t enabled) {
+    if (enabled != 0) {
+        {
+            std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+            g_duckDBRenderingEnabled = true;
+        }
+        RefreshDuckDBRenderLayersInternal();
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+    g_duckDBRenderingEnabled = false;
+    g_duckDBMarksPublished = false;
+    g_lastDuckDBRenderableFeatures.clear();
+    g_duckDBMarksProvider.reset();
+    if (g_framework && g_drapeEngineCreated) {
+        auto engine = g_framework->GetDrapeEngine();
+        if (engine) {
+            engine->ClearUserMarksGroup(kDuckDBRenderGroupId);
+            engine->ClearUserMarksGroup(kDuckDBEditGroupId);
+            engine->InvalidateUserMarks();
+            WakeRenderer();
+        }
+    }
 }
 
 FFI_PLUGIN_EXPORT void comaps_invalidate(void) {
@@ -995,7 +2491,7 @@ FFI_PLUGIN_EXPORT void comaps_force_redraw(void) {
     if (g_framework) {
         // Step 1: Update map style - clears render groups and forces tile re-request
         MapStyle currentStyle = g_framework->GetMapStyle();
-        g_framework->SetMapStyle(currentStyle);
+        ApplyRuntimeMapStyle(currentStyle);
         
         // Step 2: InvalidateRendering posts high-priority message to force re-render
         g_framework->InvalidateRendering();
@@ -1125,6 +2621,31 @@ FFI_PLUGIN_EXPORT void comaps_place_page_clear_selection(void) {
     g_framework->DeactivateMapSelection();
 }
 
+FFI_PLUGIN_EXPORT int32_t comaps_search_start(const char* query, const char* locale,
+                                              int32_t interactive, int32_t isCategory) {
+    return agus_search_bridge::StartSearch(g_framework.get(), query, locale, interactive, isCategory);
+}
+
+FFI_PLUGIN_EXPORT AgusSearchResults* comaps_search_copy_results(void) {
+    return agus_search_bridge::CopyResults();
+}
+
+FFI_PLUGIN_EXPORT void comaps_search_results_free(AgusSearchResults* data) {
+    agus_search_bridge::FreeResults(data);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_search_show_result(int32_t index) {
+    int32_t const status = agus_search_bridge::ShowResult(g_framework.get(), index);
+    if (status > 0) {
+        WakeRenderer();
+    }
+    return status;
+}
+
+FFI_PLUGIN_EXPORT void comaps_search_cancel(void) {
+    agus_search_bridge::Cancel(g_framework.get());
+}
+
 // Register a single MWM map file directly by full path.
 // This bypasses the version folder scanning and registers the map file
 // directly with the rendering engine using LocalCountryFile::MakeTemporary.
@@ -1155,6 +2676,13 @@ FFI_PLUGIN_EXPORT int comaps_register_single_map_with_version(const char* fullPa
         auto name = path;
         base::GetNameFromFullPath(name);
         base::GetNameWithoutExt(name);
+
+        if (IsMapAlreadyRegistered(name, version)) {
+            __android_log_print(ANDROID_LOG_INFO, "AgusMapsFlutterNative",
+                "comaps_register_single_map_with_version: %s already registered, skipping",
+                name.c_str());
+            return 0;
+        }
 
         platform::LocalCountryFile file(base::GetDirectory(path), platform::CountryFile(std::move(name)), version);
         file.SyncWithDisk();
@@ -1261,29 +2789,6 @@ FFI_PLUGIN_EXPORT void comaps_debug_check_point(double lat, double lon) {
     
     __android_log_print(ANDROID_LOG_INFO, "AgusMapsFlutterNative", 
         "=== END point check ===");
-}
-
-// =============================================================================
-// Viewport Query Functions
-// =============================================================================
-
-FFI_PLUGIN_EXPORT void comaps_get_viewport_center(double* lat, double* lon) {
-    if (!g_framework || !g_drapeEngineCreated) {
-        *lat = 0.0;
-        *lon = 0.0;
-        return;
-    }
-    m2::PointD const center = g_framework->GetViewportCenter();
-    ms::LatLon const ll = mercator::ToLatLon(center);
-    *lat = ll.m_lat;
-    *lon = ll.m_lon;
-}
-
-FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void) {
-    if (!g_framework || !g_drapeEngineCreated) {
-        return 0;
-    }
-    return g_framework->GetDrawScale();
 }
 
 // =============================================================================

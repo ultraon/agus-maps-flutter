@@ -8,8 +8,10 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+" # tag-pattern on pub.dev: 'v{{version}}'
 
 env:
-  COMAPS_TAG: v2026.01.08-11
-  FLUTTER_VERSION: "3.38.9"
+  COMAPS_TAG: v2026.04.23-19
+  DUCKDB_TAG: v1.5.2
+  DUCKDB_SPATIAL_TAG: dc1996bfd16bd8614fb4ccb5895b3ee0dbd4298e
+  FLUTTER_VERSION: "3.44.0"
   NDK_VERSION: "29.0.14206865"
   CMAKE_VERSION: "4.2.1"
   QT6_VERSION: "6.8.3"
@@ -63,6 +65,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          submodules: recursive
 
       # ======================================================================
       # CoMaps Source Cache (Azure Blob Storage)
@@ -129,6 +132,11 @@ jobs:
       - name: Upload CoMaps to Cache
         if: steps.clone-comaps.outputs.cloned == 'true'
         run: |
+          if [ -z "${{ secrets.AZ_URL }}" ]; then
+            echo "AZ_URL secret is not configured; skipping CoMaps cache upload."
+            exit 0
+          fi
+
           echo "Uploading pristine CoMaps to Azure Blob Storage cache..."
 
           # Install azcopy
@@ -176,6 +184,34 @@ jobs:
           pip install 'protobuf<4.0'
           # Add venv to PATH for subsequent steps
           echo "$HOME/.protobuf-venv/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=$HOME/.protobuf-venv" >> $GITHUB_ENV
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ~/vcpkg
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Setup vcpkg
+        run: |
+          VCPKG_ROOT="$HOME/vcpkg"
+          if [ ! -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" ]; then
+            echo "Installing vcpkg into $VCPKG_ROOT"
+            rm -rf "$VCPKG_ROOT"
+            git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          else
+            echo "Using cached vcpkg checkout at $VCPKG_ROOT"
+          fi
+
+          if [ ! -x "$VCPKG_ROOT/vcpkg" ]; then
+            "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> "$GITHUB_ENV"
+          echo "$VCPKG_ROOT" >> "$GITHUB_PATH"
+          "$VCPKG_ROOT/vcpkg" version
 
       - name: Install Qt 6
         uses: jurplel/install-qt-action@v4
@@ -195,7 +231,9 @@ jobs:
       # Get Flutter Dependencies (for Dart build tool)
       # ======================================================================
       - name: Get Flutter Dependencies
-        run: flutter pub get
+        run: |
+          flutter pub get
+          dart run melos bootstrap
 
       # ======================================================================
       # Bootstrap CoMaps (shared for all platforms)
@@ -206,6 +244,9 @@ jobs:
           AGUS_MAPS_BUILD_MODE: contributor
         run: dart run tool/build.dart --no-cache
 
+      - name: Run Workspace Tests
+        run: dart run melos run test --no-select
+
       - name: Ensure Boost Flat Headers
         run: |
           BOOST_DIR="thirdparty/comaps/3party/boost"
@@ -215,7 +256,9 @@ jobs:
           fi
 
           # CoMaps build uses modular headers, but iOS plugin needs flat boost/
-          if [ ! -f "$BOOST_DIR/boost/regex.hpp" ] || [ ! -f "$BOOST_DIR/boost/config.hpp" ]; then
+          if [ ! -f "$BOOST_DIR/boost/regex.hpp" ] || \
+             [ ! -f "$BOOST_DIR/boost/config.hpp" ] || \
+             [ ! -f "$BOOST_DIR/boost/container_hash/hash.hpp" ]; then
             echo "Generating Boost flat headers (b2 headers)..."
             cd "$BOOST_DIR"
             if [ ! -f "./b2" ]; then
@@ -273,7 +316,9 @@ jobs:
 
           # Create output directories
           mkdir -p ios/Resources
+          mkdir -p ios/agus_maps_flutter/Sources/agus_maps_flutter/Resources
           mkdir -p macos/Resources
+          mkdir -p macos/agus_maps_flutter/Sources/agus_maps_flutter/Resources
           mkdir -p build/metal_shaders
 
           # Compile Metal shaders
@@ -312,7 +357,9 @@ jobs:
           # Copy to plugin resource directories
           if [[ -f "build/metal_shaders/shaders_metal.metallib" ]]; then
             cp build/metal_shaders/shaders_metal.metallib ios/Resources/
+            cp build/metal_shaders/shaders_metal.metallib ios/agus_maps_flutter/Sources/agus_maps_flutter/Resources/
             cp build/metal_shaders/shaders_metal.metallib macos/Resources/
+            cp build/metal_shaders/shaders_metal.metallib macos/agus_maps_flutter/Sources/agus_maps_flutter/Resources/
             echo "✓ Metal shaders compiled successfully"
             ls -lh ios/Resources/shaders_metal.metallib
           else
@@ -325,10 +372,8 @@ jobs:
         run: |
           mkdir -p build/agus-binaries-ios/Resources
           cp ios/Resources/shaders_metal.metallib build/agus-binaries-ios/Resources/
-          # Built by tool/build.dart; the engine loads it on the iOS Simulator.
-          cp ios/Resources/shaders_metal_sim.metallib build/agus-binaries-ios/Resources/
           cd build/agus-binaries-ios
-          zip -r ../agus-binaries-ios.zip CoMaps.xcframework Resources
+          zip -r ../agus-binaries-ios.zip CoMaps.xcframework DuckDB.xcframework Resources
           ls -lh ../agus-binaries-ios.zip
 
       - name: Upload iOS Binaries Artifact
@@ -353,7 +398,7 @@ jobs:
           mkdir -p build/agus-binaries-macos/Resources
           cp macos/Resources/shaders_metal.metallib build/agus-binaries-macos/Resources/
           cd build/agus-binaries-macos
-          zip -r ../agus-binaries-macos.zip CoMaps.xcframework Resources
+          zip -r ../agus-binaries-macos.zip CoMaps.xcframework DuckDB.xcframework Resources
           ls -lh ../agus-binaries-macos.zip
 
       - name: Upload macOS Binaries Artifact
@@ -362,6 +407,19 @@ jobs:
           name: agus-binaries-macos
           path: build/agus-binaries-macos.zip
 
+      - name: Cleanup Apple Native Build Artifacts
+        run: |
+          echo "Cleaning large Apple native source and DuckDB build directories before app packaging..."
+          rm -rf thirdparty/comaps/.git
+          rm -rf thirdparty/duckdb thirdparty/duckdb-spatial
+          rm -rf build/duckdb build/duckdb-vcpkg-installed build/duckdb-vcpkg-installed-ios
+
+          echo "=== Disk Usage (After Apple Cleanup) ==="
+          df -h
+          echo ""
+          echo "=== Workspace Usage (After Apple Cleanup) ==="
+          du -sh thirdparty build build/agus-binaries-ios build/agus-binaries-macos 2>/dev/null || true
+
       # ======================================================================
       # Build iOS Example App (Simulator)
       # ======================================================================
@@ -369,6 +427,7 @@ jobs:
         run: |
           mkdir -p ios/Frameworks
           cp -r build/agus-binaries-ios/CoMaps.xcframework ios/Frameworks/
+          cp -r build/agus-binaries-ios/DuckDB.xcframework ios/Frameworks/
           ls -la ios/Frameworks/
 
       - name: Precache iOS
@@ -377,8 +436,7 @@ jobs:
       - name: Get Flutter Dependencies
         run: |
           flutter pub get
-          cd example
-          flutter pub get
+          dart run melos bootstrap
 
       - name: Download Base MWM Files
         run: |
@@ -440,6 +498,15 @@ jobs:
           flutter build ios --simulator --debug \
             --build-name=1.0.0 \
             --build-number=${{ github.run_number }}
+          if [ -d build/ios/Debug-iphonesimulator/Runner.app ]; then
+            rm -rf build/ios/iphonesimulator
+            mkdir -p build/ios/iphonesimulator
+            ditto build/ios/Debug-iphonesimulator/Runner.app \
+              build/ios/iphonesimulator/Runner.app
+          elif [ ! -d build/ios/iphonesimulator/Runner.app ]; then
+            echo "ERROR: iOS simulator Runner.app was not produced"
+            exit 1
+          fi
 
       - name: Prepare iOS Artifact
         run: |
@@ -461,6 +528,7 @@ jobs:
         run: |
           mkdir -p macos/Frameworks
           cp -r build/agus-binaries-macos/CoMaps.xcframework macos/Frameworks/
+          cp -r build/agus-binaries-macos/DuckDB.xcframework macos/Frameworks/
           ls -la macos/Frameworks/
 
       - name: Restore CoMaps Source
@@ -478,8 +546,8 @@ jobs:
 
       - name: Get Flutter Dependencies
         run: |
-          cd example
           flutter pub get
+          dart run melos bootstrap
 
       - name: Download Base MWM Files
         run: |
@@ -586,6 +654,28 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          submodules: recursive
+
+      - name: Prepare Large Android Build Volume
+        run: |
+          LARGE_DISK_ROOT="/mnt/agus-maps-ci"
+          if [ ! -d "/mnt" ]; then
+            LARGE_DISK_ROOT="${RUNNER_TEMP}/agus-maps-ci"
+          fi
+
+          sudo mkdir -p \
+            "$LARGE_DISK_ROOT/gradle-home" \
+            "$LARGE_DISK_ROOT/tmp" \
+            "$LARGE_DISK_ROOT/example-build" \
+            "$LARGE_DISK_ROOT/example-android-gradle"
+          sudo chown -R "$(id -u):$(id -g)" "$LARGE_DISK_ROOT"
+
+          echo "AGUS_CI_LARGE_DISK=$LARGE_DISK_ROOT" >> $GITHUB_ENV
+          echo "GRADLE_USER_HOME=$LARGE_DISK_ROOT/gradle-home" >> $GITHUB_ENV
+          echo "TMPDIR=$LARGE_DISK_ROOT/tmp" >> $GITHUB_ENV
+
+          echo "=== Large Build Volume ==="
+          df -h "$LARGE_DISK_ROOT"
 
       # ======================================================================
       # CoMaps Source Cache (Azure Blob Storage)
@@ -652,6 +742,11 @@ jobs:
       - name: Upload CoMaps to Cache
         if: steps.clone-comaps.outputs.cloned == 'true'
         run: |
+          if [ -z "${{ secrets.AZ_URL }}" ]; then
+            echo "AZ_URL secret is not configured; skipping CoMaps cache upload."
+            exit 0
+          fi
+
           echo "Uploading pristine CoMaps to Azure Blob Storage cache..."
 
           # Install azcopy
@@ -740,7 +835,17 @@ jobs:
             ninja-build \
             pkg-config \
             zip \
-            python3-venv
+            python3-venv \
+            optipng \
+            libgl-dev \
+            libegl-dev \
+            libgles-dev \
+            libepoxy-dev \
+            libgtk-3-dev \
+            libclang-dev \
+            clang \
+            libfreetype6-dev \
+            libharfbuzz-dev
 
           echo "CMake version:"
           cmake --version
@@ -752,6 +857,42 @@ jobs:
           pip install --upgrade pip
           pip install 'protobuf<4.0'
           echo "$HOME/.protobuf-venv/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=$HOME/.protobuf-venv" >> $GITHUB_ENV
+
+      - name: Cache vcpkg
+        uses: actions/cache@v4
+        with:
+          path: ~/vcpkg
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Setup vcpkg
+        run: |
+          VCPKG_ROOT="$HOME/vcpkg"
+          if [ ! -f "$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" ]; then
+            echo "Installing vcpkg into $VCPKG_ROOT"
+            rm -rf "$VCPKG_ROOT"
+            git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          else
+            echo "Using cached vcpkg checkout at $VCPKG_ROOT"
+          fi
+
+          if [ ! -x "$VCPKG_ROOT/vcpkg" ]; then
+            "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+
+          echo "VCPKG_ROOT=$VCPKG_ROOT" >> "$GITHUB_ENV"
+          echo "$VCPKG_ROOT" >> "$GITHUB_PATH"
+          "$VCPKG_ROOT/vcpkg" version
+
+      - name: Install Qt 6
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT6_VERSION }}
+          modules: qtpositioning
+          cache: true
+          setup-python: 'false'
 
       - name: Disk Usage Checkpoint (Initial)
         run: |
@@ -777,7 +918,9 @@ jobs:
       # Get Flutter Dependencies (for Dart build tool)
       # ======================================================================
       - name: Get Flutter Dependencies
-        run: flutter pub get
+        run: |
+          flutter pub get
+          dart run melos bootstrap
 
       # ======================================================================
       # Bootstrap CoMaps
@@ -788,6 +931,9 @@ jobs:
           AGUS_MAPS_BUILD_MODE: contributor
         run: |
           dart run tool/build.dart --no-cache
+
+      - name: Run Workspace Tests
+        run: dart run melos run test --no-select
 
       - name: Disk Usage Checkpoint (Post-Bootstrap)
         run: |
@@ -835,14 +981,23 @@ jobs:
         run: |
           echo "Cleaning large intermediate build directories before Flutter packaging..."
           rm -rf build/android-arm64-v8a build/android-armeabi-v7a build/android-x86_64
+          rm -rf build/duckdb build/duckdb-vcpkg-installed-android build/agus-binaries-android-duckdb
           rm -rf thirdparty/comaps/.git
-          rm -rf ~/.gradle/caches/transforms-* ~/.gradle/caches/*/transforms-* 2>/dev/null || true
+          rm -rf thirdparty/duckdb thirdparty/duckdb-spatial
+
+          GRADLE_CACHE_DIR="${GRADLE_USER_HOME:-$HOME/.gradle}/caches"
+          rm -rf "$GRADLE_CACHE_DIR"/transforms-* "$GRADLE_CACHE_DIR"/*/transforms-* 2>/dev/null || true
+
+          rm -rf example/build example/android/.gradle
+          mkdir -p "$AGUS_CI_LARGE_DISK/example-build" "$AGUS_CI_LARGE_DISK/example-android-gradle"
+          ln -s "$AGUS_CI_LARGE_DISK/example-build" example/build
+          ln -s "$AGUS_CI_LARGE_DISK/example-android-gradle" example/android/.gradle
 
           echo "=== Disk Usage (After Cleanup) ==="
           df -h
           echo ""
           echo "=== Workspace Usage (After Cleanup) ==="
-          du -sh thirdparty/comaps build build/agus-binaries-android example/build ~/.gradle/caches 2>/dev/null || true
+          du -sh thirdparty/comaps build build/agus-binaries-android example/build "$GRADLE_CACHE_DIR" 2>/dev/null || true
 
       # ======================================================================
       # Build Android Example App
@@ -857,8 +1012,7 @@ jobs:
       - name: Get Flutter Dependencies
         run: |
           flutter pub get
-          cd example
-          flutter pub get
+          dart run melos bootstrap
 
       - name: Download Base MWM Files
         run: |
@@ -890,20 +1044,33 @@ jobs:
           echo "=== Map Assets ==="
           ls -lh "$ASSETS_DIR/"
 
+      - name: Force Android Pre-built Packaging
+        run: |
+          echo "AGUS_MAPS_HOME=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+          echo "Removing CoMaps source checkout before Flutter packaging..."
+          rm -rf thirdparty/comaps
+
+          echo "=== Disk Usage (Before Flutter Packaging) ==="
+          df -h
+          du -sh android/prebuilt example/build "$GRADLE_USER_HOME/caches" "$AGUS_CI_LARGE_DISK" 2>/dev/null || true
+
       - name: Build Android App Bundle (AAB)
         run: |
           echo "=== Disk Usage (Before AAB) ==="
           df -h
-          du -sh thirdparty/comaps build example/build ~/.gradle/caches 2>/dev/null || true
+          du -sh android/prebuilt build example/build "$GRADLE_USER_HOME/caches" "$AGUS_CI_LARGE_DISK" 2>/dev/null || true
           cd example
           flutter build appbundle --release \
             --build-name=1.0.0 \
             --build-number=${{ github.run_number }}
 
-      - name: Build Android APK
+      - name: Build Android APKs
         run: |
+          echo "=== Disk Usage (Before Split APKs) ==="
+          df -h
+          du -sh android/prebuilt build example/build "$GRADLE_USER_HOME/caches" "$AGUS_CI_LARGE_DISK" 2>/dev/null || true
           cd example
-          flutter build apk --release \
+          flutter build apk --release --split-per-abi \
             --build-name=1.0.0 \
             --build-number=${{ github.run_number }}
 
@@ -911,7 +1078,9 @@ jobs:
         run: |
           mkdir -p artifacts
           cp example/build/app/outputs/bundle/release/app-release.aab artifacts/agus-maps-android.aab
-          cp example/build/app/outputs/flutter-apk/app-release.apk artifacts/agus-maps-android.apk
+          cp example/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk artifacts/agus-maps-android-armeabi-v7a.apk
+          cp example/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk artifacts/agus-maps-android-arm64-v8a.apk
+          cp example/build/app/outputs/flutter-apk/app-x86_64-release.apk artifacts/agus-maps-android-x86_64.apk
           echo "=== Android Artifacts ==="
           ls -lh artifacts/
 
@@ -1056,6 +1225,11 @@ jobs:
       - name: Upload CoMaps to Cache
         if: steps.clone-comaps.outputs.cloned == 'true'
         run: |
+          if ([string]::IsNullOrWhiteSpace("${{ secrets.AZ_URL }}")) {
+            Write-Host "AZ_URL secret is not configured; skipping CoMaps cache upload."
+            exit 0
+          }
+
           Write-Host "Uploading pristine CoMaps to Azure Blob Storage cache..."
 
           if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) {
@@ -1211,7 +1385,9 @@ jobs:
       # Get Flutter Dependencies (for Dart build tool)
       # ======================================================================
       - name: Get Flutter Dependencies
-        run: flutter pub get
+        run: |
+          flutter pub get
+          dart run melos bootstrap
 
       # ======================================================================
       # Bootstrap CoMaps
@@ -1362,6 +1538,7 @@ jobs:
           $env:CXX = "$env:MSYS2_ROOT\mingw64\bin\g++.exe"
           $env:PYTHON = $env:PYTHON_EXECUTABLE
           $env:PYTHON3 = $env:PYTHON_EXECUTABLE
+          $env:PYTHON3_EXECUTABLE = $env:PYTHON_EXECUTABLE
           $env:CMAKE_C_COMPILER = $env:CC
           $env:CMAKE_CXX_COMPILER = $env:CXX
           $env:ZLIB_ROOT = "$env:MSYS2_ROOT\mingw64"
@@ -1389,6 +1566,9 @@ jobs:
 
           dart run tool/build.dart --no-cache
         shell: pwsh
+
+      - name: Run Workspace Tests
+        run: dart run melos run test --no-select
 
       - name: Verify Symbols Atlas
         run: |
@@ -1442,16 +1622,41 @@ jobs:
         shell: pwsh
         run: |
           # zlib1.dll is a runtime dependency required by agus_maps_flutter.dll
-          $zlibSrc = "C:\vcpkg\installed\x64-windows\bin\zlib1.dll"
-          $zlibDest = "build\agus-binaries-windows\x64\zlib1.dll"
+          $zlibDestDir = "build\agus-binaries-windows\x64"
+          $zlibDest = Join-Path $zlibDestDir "zlib1.dll"
 
-          if (Test-Path $zlibSrc) {
+          New-Item -ItemType Directory -Path $zlibDestDir -Force | Out-Null
+
+          if (Test-Path $zlibDest) {
+            $size = [math]::Round((Get-Item $zlibDest).Length / 1KB, 2)
+            Write-Host "✓ zlib1.dll already bundled (${size}KB): $zlibDest"
+          } else {
+            $zlibCandidates = @()
+            if ($env:GITHUB_WORKSPACE) {
+              $zlibCandidates += (Join-Path $env:GITHUB_WORKSPACE "vcpkg_installed\x64-windows\bin\zlib1.dll")
+            }
+            if ($env:VCPKG_ROOT) {
+              $zlibCandidates += (Join-Path $env:VCPKG_ROOT "installed\x64-windows\bin\zlib1.dll")
+            }
+            if ($env:MSYS2_ROOT) {
+              $zlibCandidates += (Join-Path $env:MSYS2_ROOT "mingw64\bin\zlib1.dll")
+            }
+            $zlibCandidates += @(
+              "C:\vcpkg\installed\x64-windows\bin\zlib1.dll",
+              "C:\msys64\mingw64\bin\zlib1.dll",
+              "C:\tools\msys64\mingw64\bin\zlib1.dll"
+            )
+
+            $zlibSrc = $zlibCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+            if (-not $zlibSrc) {
+              Write-Error "zlib1.dll not found. Searched locations:`n  - $($zlibCandidates -join "`n  - ")"
+              exit 1
+            }
+
             Copy-Item -Path $zlibSrc -Destination $zlibDest -Force
             $size = [math]::Round((Get-Item $zlibDest).Length / 1KB, 2)
-            Write-Host "✓ Copied zlib1.dll (${size}KB)"
-          } else {
-            Write-Error "zlib1.dll not found at: $zlibSrc"
-            exit 1
+            Write-Host "✓ Copied zlib1.dll (${size}KB) from: $zlibSrc"
           }
 
           Write-Host "=== Windows Binaries ==="
@@ -1487,8 +1692,7 @@ jobs:
       - name: Get Flutter Dependencies
         run: |
           flutter pub get
-          cd example
-          flutter pub get
+          dart run melos bootstrap
 
       - name: Download Base MWM Files
         run: |
@@ -1562,6 +1766,7 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          submodules: recursive
 
       # ======================================================================
       # CoMaps Source Cache (Azure Blob Storage)
@@ -1628,6 +1833,11 @@ jobs:
       - name: Upload CoMaps to Cache
         if: steps.clone-comaps.outputs.cloned == 'true'
         run: |
+          if [ -z "${{ secrets.AZ_URL }}" ]; then
+            echo "AZ_URL secret is not configured; skipping CoMaps cache upload."
+            exit 0
+          fi
+
           echo "Uploading pristine CoMaps to Azure Blob Storage cache..."
 
           # Install azcopy
@@ -1691,6 +1901,7 @@ jobs:
           pip install 'protobuf<4.0'
           # Add venv to PATH for subsequent steps
           echo "$HOME/.protobuf-venv/bin" >> $GITHUB_PATH
+          echo "VIRTUAL_ENV=$HOME/.protobuf-venv" >> $GITHUB_ENV
 
       - name: Install Qt 6
         uses: jurplel/install-qt-action@v4
@@ -1716,7 +1927,9 @@ jobs:
       # Get Flutter Dependencies (for Dart build tool)
       # ======================================================================
       - name: Get Flutter Dependencies
-        run: flutter pub get
+        run: |
+          flutter pub get
+          dart run melos bootstrap
 
       # ======================================================================
       # Bootstrap CoMaps
@@ -1727,6 +1940,9 @@ jobs:
           AGUS_MAPS_BUILD_MODE: contributor
         run: |
           dart run tool/build.dart --no-cache
+
+      - name: Run Workspace Tests
+        run: dart run melos run test --no-select
 
       # ======================================================================
       # Build Linux Native Libraries
@@ -1758,13 +1974,26 @@ jobs:
           name: agus-binaries-linux
           path: build/agus-binaries-linux.zip
 
+      - name: Cleanup Linux Native Build Artifacts
+        run: |
+          echo "Cleaning large Linux native build directories before asset packaging..."
+          rm -rf thirdparty/comaps/.git
+          rm -rf thirdparty/duckdb thirdparty/duckdb-spatial
+          rm -rf build/duckdb build/duckdb-vcpkg-installed build/duckdb-vcpkg-installed-* build/linux
+
+          echo "=== Disk Usage (After Linux Native Cleanup) ==="
+          df -h
+          echo ""
+          echo "=== Workspace Usage (After Linux Native Cleanup) ==="
+          du -sh thirdparty build build/agus-binaries-linux 2>/dev/null || true
+
       # ======================================================================
       # Build Linux Example App
       # ======================================================================
       - name: Setup Linux Pre-built Binaries
         run: |
           mkdir -p linux/prebuilt/x64
-          cp build/agus-binaries-linux/x64/libagus_maps_flutter.so linux/prebuilt/x64/
+          cp -R build/agus-binaries-linux/x64/* linux/prebuilt/x64/
           echo "=== Prebuilt Structure ==="
           ls -la linux/prebuilt/
 
@@ -1774,8 +2003,7 @@ jobs:
       - name: Get Flutter Dependencies
         run: |
           flutter pub get
-          cd example
-          flutter pub get
+          dart run melos bootstrap
 
       - name: Download Base MWM Files
         run: |
@@ -1886,6 +2114,16 @@ jobs:
 
           echo "Created agus-assets.zip ($(du -h agus-assets.zip | cut -f1))"
 
+      - name: Force Linux Pre-built Packaging
+        run: |
+          echo "AGUS_MAPS_HOME=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+          echo "Removing CoMaps source checkout before Flutter Linux packaging..."
+          rm -rf thirdparty/comaps
+
+          echo "=== Disk Usage (Before Linux Flutter Packaging) ==="
+          df -h
+          du -sh linux/prebuilt build example/build 2>/dev/null || true
+
       - name: Upload Assets Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -1942,7 +2180,11 @@ jobs:
           # Only include example apps in final release (with version in filename)
           # Individual platform binaries are consolidated into the unified package
           [ -f all-artifacts/agus-maps-android.aab ] && cp all-artifacts/agus-maps-android.aab "final-assets/agus-maps-android-${VERSION_TAG}.aab" || true
-          [ -f all-artifacts/agus-maps-android.apk ] && cp all-artifacts/agus-maps-android.apk "final-assets/agus-maps-android-${VERSION_TAG}.apk" || true
+          for APK in all-artifacts/agus-maps-android-*.apk; do
+            [ -f "$APK" ] || continue
+            APK_BASENAME=$(basename "$APK" .apk)
+            cp "$APK" "final-assets/${APK_BASENAME}-${VERSION_TAG}.apk"
+          done
           [ -f all-artifacts/agus-maps-ios-simulator.app.zip ] && cp all-artifacts/agus-maps-ios-simulator.app.zip "final-assets/agus-maps-ios-simulator-${VERSION_TAG}.app.zip" || true
           [ -f all-artifacts/agus-maps-macos.app.zip ] && cp all-artifacts/agus-maps-macos.app.zip "final-assets/agus-maps-macos-${VERSION_TAG}.app.zip" || true
           [ -f all-artifacts/agus-maps-windows.zip ] && cp all-artifacts/agus-maps-windows.zip "final-assets/agus-maps-windows-${VERSION_TAG}.zip" || true
@@ -1961,6 +2203,8 @@ jobs:
 
           Flutter Version: ${{ env.FLUTTER_VERSION }}
           CoMaps Version: ${{ env.COMAPS_TAG }}
+          DuckDB Version: ${{ env.DUCKDB_TAG }}
+          duckdb-spatial Version: ${{ env.DUCKDB_SPATIAL_TAG }}
 
           Supported Platforms:
           - Android (armeabi-v7a, arm64-v8a, x86_64)
@@ -2000,8 +2244,8 @@ jobs:
           fi
 
           # ---------------------------------------------------------
-          # iOS: ios/Frameworks/CoMaps.xcframework/
-          # Archive contains: CoMaps.xcframework/ directly
+          # iOS: ios/Frameworks/{CoMaps,DuckDB}.xcframework/
+          # Archive contains both XCFrameworks directly
           # Target: ios/Frameworks/
           # ---------------------------------------------------------
           if [ -f ../all-artifacts/agus-binaries-ios.zip ]; then
@@ -2013,8 +2257,8 @@ jobs:
           fi
 
           # ---------------------------------------------------------
-          # macOS: macos/Frameworks/CoMaps.xcframework/
-          # Archive contains: CoMaps.xcframework/ directly
+          # macOS: macos/Frameworks/{CoMaps,DuckDB}.xcframework/
+          # Archive contains both XCFrameworks directly
           # Target: macos/Frameworks/
           # ---------------------------------------------------------
           if [ -f ../all-artifacts/agus-binaries-macos.zip ]; then
@@ -2131,8 +2375,8 @@ jobs:
 
             This SDK contains all platform binaries:
             - `android/prebuilt/{arm64-v8a,armeabi-v7a,x86_64}/`
-            - `ios/Frameworks/CoMaps.xcframework/`
-            - `macos/Frameworks/CoMaps.xcframework/`
+            - `ios/Frameworks/{CoMaps,DuckDB}.xcframework/`
+            - `macos/Frameworks/{CoMaps,DuckDB}.xcframework/`
             - `windows/prebuilt/x64/`
             - `linux/prebuilt/x64/`
             - `example/assets/` (CoMaps data files - copy to your app)
@@ -2154,7 +2398,9 @@ jobs:
             #### 📱 Example Apps
             | Platform | File | Description |
             |----------|------|-------------|
-            | Android | `agus-maps-android-${{ github.ref_name }}.apk` | Universal APK |
+            | Android | `agus-maps-android-arm64-v8a-${{ github.ref_name }}.apk` | arm64-v8a APK |
+            | Android | `agus-maps-android-armeabi-v7a-${{ github.ref_name }}.apk` | armeabi-v7a APK |
+            | Android | `agus-maps-android-x86_64-${{ github.ref_name }}.apk` | x86_64 APK |
             | Android | `agus-maps-android-${{ github.ref_name }}.aab` | App Bundle (Play Store) |
             | iOS | `agus-maps-ios-simulator-${{ github.ref_name }}.app.zip` | Simulator Debug |
             | macOS | `agus-maps-macos-${{ github.ref_name }}.app.zip` | Universal Release |
@@ -2167,6 +2413,8 @@ jobs:
             - Build Number: ${{ github.run_number }}
             - Flutter: ${{ env.FLUTTER_VERSION }}
             - CoMaps: ${{ env.COMAPS_TAG }}
+            - DuckDB: ${{ env.DUCKDB_TAG }}
+            - duckdb-spatial: ${{ env.DUCKDB_SPATIAL_TAG }}
           draft: false
           prerelease: false
           files: |

@@ -26,31 +26,71 @@
 #include <string>
 #include <memory>
 #include <atomic>
+#include <algorithm>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
+#include <set>
 #include <vector>
 #include <utility>
 #include <sstream>
 #include <iomanip>
 #include <cmath>
 #include <string_view>
+#include <thread>
 
 // CoMaps Framework includes
 #include "base/file_name_utils.hpp"
 #include "base/logging.hpp"
+#include "base/localisation.hpp"
 #include "map/framework.hpp"
 #include "map/place_page_info.hpp"
+#include "indexer/map_style.hpp"
+#include "indexer/map_style_reader.hpp"
 #include "platform/local_country_file.hpp"
+#include "drape/color.hpp"
 #include "drape/graphics_context_factory.hpp"
 #include "drape_frontend/visual_params.hpp"
 #include "drape_frontend/user_event_stream.hpp"
 #include "drape_frontend/active_frame_callback.hpp"
+#include "drape_frontend/drape_api.hpp"
 #include "geometry/mercator.hpp"
+#include "geometry/screenbase.hpp"
 #include "indexer/feature_meta.hpp"
+#include "agus_navigation_bridge.hpp"
+#include "agus_search_bridge.hpp"
 
 // Forward declarations for Windows platform (defined in agus_platform_win.cpp)
 extern "C" void AgusPlatformWin_InitPaths(const char* resourcePath, const char* writablePath);
+
+#if defined(NDEBUG) || defined(RELEASE)
+#define AGUS_RELEASE_BUILD 1
+#else
+#define AGUS_RELEASE_BUILD 0
+#endif
+
+static void AgusWriteLog(char const * message) {
+    OutputDebugStringA(message);
+    std::fprintf(stderr, "%s", message);
+    std::fflush(stderr);
+}
+
+static void AgusLogPrintf(char const * format, ...) {
+    char buffer[1024];
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(buffer, sizeof(buffer), format, args);
+    va_end(args);
+    AgusWriteLog(buffer);
+}
+
+#if AGUS_RELEASE_BUILD
+#define AGUS_DEBUG_LOG(...) do {} while (0)
+#else
+#define AGUS_DEBUG_LOG(...) AgusLogPrintf(__VA_ARGS__)
+#endif
 
 #pragma region Crash Dump Handler
 
@@ -181,6 +221,419 @@ static std::atomic<bool> g_frameNotificationPending{false};
 static std::mutex g_mutex;
 
 static std::mutex g_placePageMutex;
+static std::mutex g_mapPointerMutex;
+static std::mutex g_viewportMutex;
+static double g_currentBearingDegrees = 0.0;
+static std::unique_ptr<ScreenBase> g_currentScreen;
+static bool g_3dBuildingsEnabled = false;
+static bool g_outdoorsEnabled = false;
+static bool g_isolinesEnabled = false;
+static bool g_subwayEnabled = false;
+
+struct AgusMapPointerState {
+    double physicalX = 0.0;
+    double physicalY = 0.0;
+    double lat = 0.0;
+    double lon = 0.0;
+    bool insideMap = false;
+    bool hasCoordinate = false;
+};
+
+static AgusMapPointerState g_lastMapPointer;
+
+namespace
+{
+double constexpr kDegreesPerRadian = 180.0 / 3.14159265358979323846;
+double constexpr kRadiansPerDegree = 3.14159265358979323846 / 180.0;
+std::set<std::string> g_duckDBInteractionDrapeLineIds;
+std::set<std::string> g_duckDBInteractionPointIds;
+std::set<std::string> g_duckDBCommittedDrapeLineIds;
+std::set<std::string> g_duckDBCommittedPointIds;
+std::mutex g_duckDBRenderMutex;
+bool g_duckDBRenderingEnabled = false;
+bool g_duckDBRenderPublished = false;
+std::vector<std::string> g_lastDuckDBRenderableFeatureKeys;
+std::chrono::steady_clock::time_point g_lastDuckDBRenderRefresh;
+std::atomic<uint64_t> g_duckDBViewportGeneration{0};
+std::atomic<bool> g_duckDBViewportRefreshScheduled{false};
+int32_t constexpr kDuckDBRenderFetchBatchSize = 1000;
+int32_t constexpr kDuckDBRenderFetchMaxFeatures = 10000;
+auto constexpr kDuckDBViewportRefreshInterval = std::chrono::milliseconds(250);
+auto constexpr kDuckDBViewportIdleRefreshDelay = std::chrono::milliseconds(450);
+
+struct DuckDBRenderViewport {
+    double minLon = 0.0;
+    double minLat = 0.0;
+    double maxLon = 0.0;
+    double maxLat = 0.0;
+};
+
+int32_t RefreshDuckDBRenderLayersInternal();
+void ScheduleDuckDBRenderRefreshAfterViewportIdle();
+
+struct DuckDBInteractionLineStyle {
+    dp::Color color = dp::Color(37, 99, 235, 235);
+    float width = 3.0f;
+    bool dashed = false;
+    double dashLength = 12.0;
+    double gapLength = 7.0;
+};
+
+double NormalizeBearingDegrees(double degrees) {
+    double normalized = std::fmod(degrees, 360.0);
+    if (normalized < 0.0) {
+        normalized += 360.0;
+    }
+    return normalized >= 359.999 ? 0.0 : normalized;
+}
+
+bool IsOutdoorsStyle(MapStyle style) {
+    return style == MapStyleOutdoorsLight || style == MapStyleOutdoorsDark;
+}
+
+void ApplyRuntimeMapStyle(MapStyle mapStyle) {
+    if (!g_framework || mapStyle == MapStyleMerged) {
+        return;
+    }
+    GetStyleReader().SetCurrentStyle(mapStyle);
+    if (auto engine = g_framework->GetDrapeEngine()) {
+        engine->UpdateMapStyle();
+    }
+}
+
+void WakeRenderer() {
+    if (!g_framework) {
+        return;
+    }
+    g_framework->InvalidateRendering();
+    g_framework->InvalidateRect(g_framework->GetCurrentViewport());
+    if (g_drapeEngineCreated) {
+        g_framework->MakeFrameActive();
+    }
+}
+
+void RequestActiveRenderFrame() {
+    if (g_framework && g_drapeEngineCreated) {
+        g_framework->MakeFrameActive();
+    }
+}
+
+void SetViewportTracking() {
+    if (!g_framework) {
+        return;
+    }
+    g_framework->SetViewportListener([](ScreenBase const & screen) {
+        g_currentBearingDegrees = NormalizeBearingDegrees(
+            screen.GetAngle() * kDegreesPerRadian);
+        {
+            std::lock_guard<std::mutex> lock(g_viewportMutex);
+            g_currentScreen = std::make_unique<ScreenBase>(screen);
+        }
+        ScheduleDuckDBRenderRefreshAfterViewportIdle();
+    });
+}
+
+std::vector<m2::PointD> ParseWktMercatorPoints(char const * wkt) {
+    std::vector<m2::PointD> points;
+    if (wkt == nullptr) {
+        return points;
+    }
+
+    char const * cursor = wkt;
+    while (*cursor != '\0') {
+        char * numberEnd = nullptr;
+        double const lon = std::strtod(cursor, &numberEnd);
+        if (numberEnd == cursor) {
+            ++cursor;
+            continue;
+        }
+        cursor = numberEnd;
+
+        double const lat = std::strtod(cursor, &numberEnd);
+        if (numberEnd == cursor) {
+            break;
+        }
+        cursor = numberEnd;
+        points.push_back(mercator::FromLatLon(lat, lon));
+    }
+    return points;
+}
+
+std::vector<std::vector<m2::PointD>> ParseWktMercatorGeometries(char const * wkt) {
+    std::vector<std::vector<m2::PointD>> geometries;
+    if (wkt == nullptr) {
+        return geometries;
+    }
+
+    std::string_view const text(wkt);
+    size_t start = 0;
+    while (start < text.size()) {
+        size_t end = text.find('\n', start);
+        if (end == std::string_view::npos) {
+            end = text.size();
+        }
+        auto const chunk = text.substr(start, end - start);
+        if (!chunk.empty()) {
+            std::string geometry(chunk);
+            auto points = ParseWktMercatorPoints(geometry.c_str());
+            if (!points.empty()) {
+                geometries.push_back(std::move(points));
+            }
+        }
+        start = end + 1;
+    }
+    return geometries;
+}
+
+std::vector<m2::PointD> FlattenGeometryPoints(
+    std::vector<std::vector<m2::PointD>> const & geometries) {
+    std::vector<m2::PointD> points;
+    for (auto const & geometry : geometries) {
+        points.insert(points.end(), geometry.begin(), geometry.end());
+    }
+    return points;
+}
+
+std::vector<std::vector<m2::PointD>> BuildInteractionLineGeometries(
+    std::vector<m2::PointD> const & points,
+    DuckDBInteractionLineStyle const & style) {
+    if (points.size() < 2) {
+        return {};
+    }
+    if (!style.dashed) {
+        return {points};
+    }
+
+    ScreenBase screen;
+    {
+        std::lock_guard<std::mutex> lock(g_viewportMutex);
+        if (!g_currentScreen) {
+            return {points};
+        }
+        screen = *g_currentScreen;
+    }
+
+    double const dashLength = std::max(1.0, style.dashLength);
+    double const gapLength = std::max(1.0, style.gapLength);
+    double const cycleLength = dashLength + gapLength;
+    std::vector<std::vector<m2::PointD>> dashes;
+    for (size_t segmentIndex = 1; segmentIndex < points.size(); ++segmentIndex) {
+        auto const & start = points[segmentIndex - 1];
+        auto const & end = points[segmentIndex];
+        auto const startPx = screen.GtoP(start);
+        auto const endPx = screen.GtoP(end);
+        double const lengthPx = std::hypot(endPx.x - startPx.x, endPx.y - startPx.y);
+        if (lengthPx <= 0.0) {
+            continue;
+        }
+        for (double offsetPx = 0.0; offsetPx < lengthPx; offsetPx += cycleLength) {
+            double const dashEndPx = std::min(lengthPx, offsetPx + dashLength);
+            if (dashEndPx <= offsetPx) {
+                continue;
+            }
+            double const startT = offsetPx / lengthPx;
+            double const endT = dashEndPx / lengthPx;
+            dashes.push_back({
+                m2::PointD(
+                    start.x + ((end.x - start.x) * startT),
+                    start.y + ((end.y - start.y) * startT)),
+                m2::PointD(
+                    start.x + ((end.x - start.x) * endT),
+                    start.y + ((end.y - start.y) * endT)),
+            });
+        }
+    }
+    return dashes.empty() ? std::vector<std::vector<m2::PointD>>{points} : dashes;
+}
+
+void UpdateDuckDBDrapeApiLines(
+    std::set<std::string> & activeIds,
+    std::vector<std::vector<m2::PointD>> const & lineGeometries,
+    std::string const & idPrefix,
+    DuckDBInteractionLineStyle const & style) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+
+    std::set<std::string> nextIds;
+    size_t lineIndex = 0;
+    for (auto const & points : lineGeometries) {
+        auto const renderGeometries = BuildInteractionLineGeometries(points, style);
+        size_t segmentIndex = 0;
+        for (auto const & renderPoints : renderGeometries) {
+            if (renderPoints.size() < 2) {
+                continue;
+            }
+            auto const id = idPrefix + "-" + std::to_string(lineIndex) +
+                "-" + std::to_string(segmentIndex++);
+            nextIds.insert(id);
+            g_framework->GetDrapeApi().AddLine(
+                id,
+                df::DrapeApiLineData(renderPoints, style.color)
+                    .Width(style.width));
+        }
+        ++lineIndex;
+    }
+
+    if (!lineGeometries.empty() && nextIds.empty() && !activeIds.empty()) {
+        return;
+    }
+
+    for (auto const & oldId : activeIds) {
+        if (nextIds.count(oldId) == 0) {
+            g_framework->GetDrapeApi().RemoveLine(oldId);
+        }
+    }
+    activeIds = std::move(nextIds);
+}
+
+void ClearDuckDBDrapeApiLines(std::set<std::string> & activeIds) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        activeIds.clear();
+        return;
+    }
+    for (auto const & id : activeIds) {
+        g_framework->GetDrapeApi().RemoveLine(id);
+    }
+    activeIds.clear();
+}
+
+void UpdateDuckDBDrapeApiPoints(
+    std::set<std::string> & activeIds,
+    std::vector<m2::PointD> const & points,
+    std::string const & idPrefix,
+    dp::Color color,
+    float width) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        activeIds.clear();
+        return;
+    }
+
+    std::set<std::string> nextIds;
+    for (size_t index = 0; index < points.size(); ++index) {
+        auto const id = idPrefix + "-" + std::to_string(index);
+        nextIds.insert(id);
+        g_framework->GetDrapeApi().AddLine(
+            id,
+            df::DrapeApiLineData(std::vector<m2::PointD>{points[index]}, color)
+                .Width(width)
+                .ShowPoints(true));
+    }
+
+    for (auto const & oldId : activeIds) {
+        if (nextIds.count(oldId) == 0) {
+            g_framework->GetDrapeApi().RemoveLine(oldId);
+        }
+    }
+    activeIds = std::move(nextIds);
+}
+
+void SetOutdoorsEnabledInternal(bool enabled) {
+    if (!g_framework) {
+        return;
+    }
+
+    g_outdoorsEnabled = enabled;
+    auto const currentStyle = g_framework->GetMapStyle();
+    bool const dark = MapStyleIsDark(currentStyle);
+
+    if (enabled) {
+        ApplyRuntimeMapStyle(dark ? MapStyleOutdoorsDark : MapStyleOutdoorsLight);
+    } else if (IsOutdoorsStyle(currentStyle)) {
+        ApplyRuntimeMapStyle(dark ? MapStyleDefaultDark : MapStyleDefaultLight);
+    }
+}
+
+void SetIsolinesEnabledInternal(bool enabled) {
+    if (!g_framework) {
+        return;
+    }
+    g_isolinesEnabled = enabled;
+    g_framework->GetIsolinesManager().SetEnabled(enabled);
+}
+
+void SetSubwayEnabledInternal(bool enabled) {
+    if (!g_framework) {
+        return;
+    }
+    if (enabled) {
+        SetOutdoorsEnabledInternal(false);
+        SetIsolinesEnabledInternal(false);
+    }
+    g_subwayEnabled = enabled;
+    g_framework->GetTransitManager().EnableTransitSchemeMode(enabled);
+}
+
+bool IsPointFeature(char const * geometryKind, char const * wkt) {
+    std::string_view const kind =
+        geometryKind == nullptr ? std::string_view() : std::string_view(geometryKind);
+    if (kind == "point") {
+        return true;
+    }
+    std::string_view const text =
+        wkt == nullptr ? std::string_view() : std::string_view(wkt);
+    return text.rfind("POINT", 0) == 0;
+}
+
+int ClampZoom(int zoom) {
+    if (zoom < 1) {
+        return 1;
+    }
+    return std::min(zoom, 20);
+}
+
+DuckDBRenderViewport GetDuckDBRenderViewport() {
+    auto const latLonRect = mercator::ToLatLon(g_framework->GetCurrentViewport());
+    return {
+        std::min(latLonRect.minY(), latLonRect.maxY()),
+        std::min(latLonRect.minX(), latLonRect.maxX()),
+        std::max(latLonRect.minY(), latLonRect.maxY()),
+        std::max(latLonRect.minX(), latLonRect.maxX()),
+    };
+}
+
+bool ShouldRefreshDuckDBRenderOnViewportChange() {
+    std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+    if (!g_duckDBRenderingEnabled) {
+        return false;
+    }
+    auto const now = std::chrono::steady_clock::now();
+    return now - g_lastDuckDBRenderRefresh >= kDuckDBViewportRefreshInterval;
+}
+
+void ScheduleDuckDBRenderRefreshAfterViewportIdle() {
+    {
+        std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+        if (!g_duckDBRenderingEnabled) {
+            return;
+        }
+    }
+
+    g_duckDBViewportGeneration.fetch_add(1, std::memory_order_relaxed);
+    bool expected = false;
+    if (!g_duckDBViewportRefreshScheduled.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    std::thread([]() {
+        while (true) {
+            auto const observedGeneration =
+                g_duckDBViewportGeneration.load(std::memory_order_relaxed);
+            std::this_thread::sleep_for(kDuckDBViewportIdleRefreshDelay);
+            if (observedGeneration ==
+                g_duckDBViewportGeneration.load(std::memory_order_relaxed)) {
+                break;
+            }
+        }
+
+        g_duckDBViewportRefreshScheduled.store(false, std::memory_order_release);
+        if (ShouldRefreshDuckDBRenderOnViewportChange()) {
+            RefreshDuckDBRenderLayersInternal();
+        }
+    }).detach();
+}
+}  // namespace
 
 static char* CopyString(std::string const & value) {
     size_t const size = value.size();
@@ -315,6 +768,22 @@ static AgusPlacePageData* BuildPlacePageData(place_page::Info const & info) {
 
 /// Custom log handler that redirects to OutputDebugString and stderr
 static void AgusLogMessage(base::LogLevel level, base::SrcPoint const & src, std::string const & msg) {
+#if AGUS_RELEASE_BUILD
+    if (level < base::LWARNING) {
+        return;
+    }
+    if (msg.find("Detected using of unknown symbol") != std::string::npos ||
+        msg.find("Style error. Symbol name must be valid") != std::string::npos ||
+        msg.find("Bad emoji code: U+2139") != std::string::npos ||
+        msg.find("Can't find World map file") != std::string::npos ||
+        msg.find("Can't load cities boundaries") != std::string::npos ||
+        msg.find("Can't open en-US localization file: sound-strings") != std::string::npos ||
+        msg.find("Inconsistent MWM and version for LocalCountryFile") != std::string::npos ||
+        msg.find("Cannot read power manager config file") != std::string::npos) {
+        return;
+    }
+#endif
+
     const char* levelStr;
     switch (level) {
         case base::LDEBUG: levelStr = "DEBUG"; break;
@@ -326,14 +795,11 @@ static void AgusLogMessage(base::LogLevel level, base::SrcPoint const & src, std
     }
     
     std::string out = "[CoMaps " + std::string(levelStr) + "] " + DebugPrint(src) + msg + "\n";
-    
-    OutputDebugStringA(out.c_str());
-    std::fprintf(stderr, "%s", out.c_str());
-    std::fflush(stderr);
+    AgusWriteLog(out.c_str());
     
     // Only abort on CRITICAL, not ERROR
     if (level >= base::LCRITICAL) {
-        OutputDebugStringA("[CoMaps CRITICAL] Aborting...\n");
+        AgusWriteLog("[CoMaps CRITICAL] Aborting...\n");
         std::abort();
     }
 }
@@ -347,9 +813,7 @@ static void ensureLoggingConfigured() {
         // Install crash handler for better diagnostics
         installCrashHandler();
         
-        OutputDebugStringA("[AgusMapsFlutter] Logging initialized\n");
-        std::fprintf(stderr, "[AgusMapsFlutter] Logging initialized\n");
-        std::fflush(stderr);
+        AGUS_DEBUG_LOG("[AgusMapsFlutter] Logging initialized\n");
     }
 }
 
@@ -399,15 +863,15 @@ static void createDrapeEngineIfNeeded(int width, int height, float density) {
     }
     
     if (width <= 0 || height <= 0) {
-        OutputDebugStringA("[AgusMapsFlutter] createDrapeEngine: Invalid dimensions\n");
+        AgusWriteLog("[AgusMapsFlutter] createDrapeEngine: Invalid dimensions\n");
         return;
     }
     
-    // Register active frame callback BEFORE creating DrapeEngine
-    df::SetActiveFrameCallback([]() {
-        notifyFlutterFrameReady();
-    });
-    OutputDebugStringA("[AgusMapsFlutter] Active frame callback registered\n");
+    // Present() performs the D3D copy and only then notifies Flutter. Avoid the
+    // generic active-frame callback here because it fires before Present(), which
+    // can make Flutter sample an old or blank shared texture.
+    df::SetActiveFrameCallback({});
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] Active frame callback disabled; Present handles frame delivery\n");
     
     Framework::DrapeCreationParams p;
     p.m_apiVersion = dp::ApiVersion::OpenGLES3;  // Use OpenGL on Windows
@@ -415,19 +879,13 @@ static void createDrapeEngineIfNeeded(int width, int height, float density) {
     p.m_surfaceHeight = height;
     p.m_visualScale = density;
     
-    char msg[256];
-    snprintf(msg, sizeof(msg), "[AgusMapsFlutter] Creating DrapeEngine: %dx%d, scale=%.2f, API=OpenGL\n",
-             width, height, density);
-    OutputDebugStringA(msg);
-    std::fprintf(stderr, "%s", msg);
-    std::fflush(stderr);
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] Creating DrapeEngine: %dx%d, scale=%.2f, API=OpenGL\n",
+                   width, height, density);
     
     g_framework->CreateDrapeEngine(make_ref(g_threadSafeFactory), std::move(p));
     g_drapeEngineCreated = true;
     
-    OutputDebugStringA("[AgusMapsFlutter] DrapeEngine created successfully\n");
-    std::fprintf(stderr, "[AgusMapsFlutter] DrapeEngine created successfully\n");
-    std::fflush(stderr);
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] DrapeEngine created successfully\n");
 }
 
 #pragma endregion
@@ -450,13 +908,9 @@ FFI_PLUGIN_EXPORT void comaps_init(const char* apkPath, const char* storagePath)
 
 FFI_PLUGIN_EXPORT void comaps_init_paths(const char* resourcePath, const char* writablePath) {
     ensureLoggingConfigured();
-    
-    char msg[512];
-    snprintf(msg, sizeof(msg), "[AgusMapsFlutter] comaps_init_paths: resource=%s, writable=%s\n",
-             resourcePath, writablePath);
-    OutputDebugStringA(msg);
-    std::fprintf(stderr, "%s", msg);
-    std::fflush(stderr);
+
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] comaps_init_paths: resource=%s, writable=%s\n",
+                   resourcePath, writablePath);
     
     // Store paths
     g_resourcePath = resourcePath ? resourcePath : "";
@@ -466,19 +920,17 @@ FFI_PLUGIN_EXPORT void comaps_init_paths(const char* resourcePath, const char* w
     AgusPlatformWin_InitPaths(resourcePath, writablePath);
     g_platformInitialized = true;
     
-    OutputDebugStringA("[AgusMapsFlutter] Platform initialized, Framework deferred to surface creation\n");
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] Platform initialized, Framework deferred to surface creation\n");
 }
 
 FFI_PLUGIN_EXPORT void comaps_load_map_path(const char* path) {
-    char msg[512];
-    snprintf(msg, sizeof(msg), "[AgusMapsFlutter] comaps_load_map_path: %s\n", path);
-    OutputDebugStringA(msg);
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] comaps_load_map_path: %s\n", path);
     
     if (g_framework) {
         g_framework->RegisterAllMaps();
-        OutputDebugStringA("[AgusMapsFlutter] Maps registered\n");
+        AGUS_DEBUG_LOG("[AgusMapsFlutter] Maps registered\n");
     } else {
-        OutputDebugStringA("[AgusMapsFlutter] Framework not yet initialized, maps will be loaded later\n");
+        AGUS_DEBUG_LOG("[AgusMapsFlutter] Framework not yet initialized, maps will be loaded later\n");
     }
 }
 
@@ -486,18 +938,13 @@ FFI_PLUGIN_EXPORT void comaps_load_map_path(const char* path) {
 extern "C" void agus_localization_set_locale(const char* localeTag);
 
 FFI_PLUGIN_EXPORT void comaps_set_locale(const char* localeTag) {
-    char msg[512];
-    snprintf(msg, sizeof(msg), "[AgusMapsFlutter] comaps_set_locale: %s\n", localeTag ? localeTag : "(null)");
-    OutputDebugStringA(msg);
-    std::fprintf(stderr, "%s", msg);
-    std::fflush(stderr);
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] comaps_set_locale: %s\n", localeTag ? localeTag : "(null)");
     
     if (localeTag && *localeTag) {
         agus_localization_set_locale(localeTag);
-        snprintf(msg, sizeof(msg), "[AgusMapsFlutter] Locale set to '%s'\n", localeTag);
-        OutputDebugStringA(msg);
+        AGUS_DEBUG_LOG("[AgusMapsFlutter] Locale set to '%s'\n", localeTag);
     } else {
-        OutputDebugStringA("[AgusMapsFlutter] Empty locale tag, using auto-detect\n");
+        AGUS_DEBUG_LOG("[AgusMapsFlutter] Empty locale tag, using auto-detect\n");
     }
 }
 
@@ -520,6 +967,546 @@ FFI_PLUGIN_EXPORT void comaps_set_view(double lat, double lon, int zoom) {
     }
 }
 
+FFI_PLUGIN_EXPORT int comaps_get_viewport_center(double* lat, double* lon) {
+    if (!g_framework || !lat || !lon) {
+        return 0;
+    }
+    auto const ll = mercator::ToLatLon(g_framework->GetViewportCenter());
+    *lat = ll.m_lat;
+    *lon = ll.m_lon;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void) {
+    if (!g_framework) {
+        return -1;
+    }
+    return g_framework->GetDrawScale();
+}
+
+FFI_PLUGIN_EXPORT int comaps_screen_to_latlon(
+    double physical_x,
+    double physical_y,
+    double* lat,
+    double* lon) {
+    if (!g_framework || !lat || !lon) {
+        return 0;
+    }
+
+    auto const mercatorPoint = g_framework->PtoG(
+        m2::PointD(physical_x, physical_y));
+    auto const coordinate = mercator::ToLatLon(mercatorPoint);
+    *lat = coordinate.m_lat;
+    *lon = coordinate.m_lon;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT int comaps_update_map_pointer(
+    double physical_x,
+    double physical_y,
+    int inside_map,
+    double* lat,
+    double* lon) {
+    if (!lat || !lon) {
+        return 0;
+    }
+
+    bool hasCoordinate = false;
+    double projectedLat = 0.0;
+    double projectedLon = 0.0;
+    if (g_framework && inside_map != 0) {
+        auto const mercatorPoint = g_framework->PtoG(
+            m2::PointD(physical_x, physical_y));
+        auto const coordinate = mercator::ToLatLon(mercatorPoint);
+        projectedLat = coordinate.m_lat;
+        projectedLon = coordinate.m_lon;
+        hasCoordinate = true;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_mapPointerMutex);
+        g_lastMapPointer.physicalX = physical_x;
+        g_lastMapPointer.physicalY = physical_y;
+        g_lastMapPointer.lat = projectedLat;
+        g_lastMapPointer.lon = projectedLon;
+        g_lastMapPointer.insideMap = inside_map != 0;
+        g_lastMapPointer.hasCoordinate = hasCoordinate;
+    }
+
+    if (!hasCoordinate) {
+        return 0;
+    }
+    *lat = projectedLat;
+    *lon = projectedLon;
+    return 1;
+}
+
+FFI_PLUGIN_EXPORT int comaps_latlon_to_screen(
+    double lat,
+    double lon,
+    double* physical_x,
+    double* physical_y) {
+    if (!g_framework || !physical_x || !physical_y) {
+        return 0;
+    }
+
+    auto const screenPoint = g_framework->GtoP(mercator::FromLatLon(lat, lon));
+    *physical_x = screenPoint.x;
+    *physical_y = screenPoint.y;
+    return 1;
+}
+
+namespace {
+int32_t RefreshDuckDBRenderLayersInternal() {
+    std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+    if (!g_framework || !g_drapeEngineCreated || agus_duckdb_is_open() == 0) {
+        return -1;
+    }
+
+    auto const viewport = GetDuckDBRenderViewport();
+    auto const zoom = ClampZoom(g_framework->GetDrawScale());
+    std::vector<std::vector<m2::PointD>> lineGeometries;
+    std::vector<m2::PointD> pointGeometries;
+    std::vector<std::string> featureKeys;
+    lineGeometries.reserve(kDuckDBRenderFetchBatchSize);
+    pointGeometries.reserve(64);
+    featureKeys.reserve(kDuckDBRenderFetchBatchSize);
+
+    int32_t queryOffset = 0;
+    while (queryOffset < kDuckDBRenderFetchMaxFeatures) {
+        int32_t const batchLimit =
+            std::min(kDuckDBRenderFetchBatchSize,
+                     kDuckDBRenderFetchMaxFeatures - queryOffset);
+        AgusDuckDBRenderFeature * features = nullptr;
+        int32_t featureCount = 0;
+        if (agus_duckdb_copy_render_features_page(
+                viewport.minLon, viewport.minLat, viewport.maxLon, viewport.maxLat,
+                zoom, batchLimit, queryOffset, &features, &featureCount) == 0) {
+            return -2;
+        }
+
+        for (int32_t index = 0; index < featureCount; ++index) {
+            auto const & feature = features[index];
+            auto points = ParseWktMercatorPoints(feature.geometry_wkt);
+            if (points.empty()) {
+                continue;
+            }
+            std::string key = feature.layer_id ? feature.layer_id : "";
+            key += "/";
+            key += feature.feature_id ? feature.feature_id : "";
+            key += ":";
+            key += feature.geometry_wkt ? feature.geometry_wkt : "";
+            featureKeys.push_back(std::move(key));
+            if (IsPointFeature(feature.geometry_kind, feature.geometry_wkt)) {
+                pointGeometries.push_back(points.front());
+            } else if (points.size() > 1) {
+                lineGeometries.push_back(std::move(points));
+            }
+        }
+
+        agus_duckdb_free_render_features(features, featureCount);
+        queryOffset += featureCount;
+        if (featureCount < batchLimit) {
+            break;
+        }
+    }
+
+    if (g_duckDBRenderPublished && featureKeys == g_lastDuckDBRenderableFeatureKeys) {
+        g_lastDuckDBRenderRefresh = std::chrono::steady_clock::now();
+        return static_cast<int32_t>(featureKeys.size());
+    }
+
+    DuckDBInteractionLineStyle style;
+    style.color = dp::Color(37, 99, 235, 235);
+    style.width = 3.0f;
+    style.dashed = false;
+    UpdateDuckDBDrapeApiLines(
+        g_duckDBCommittedDrapeLineIds,
+        lineGeometries,
+        "duckdb-committed",
+        style);
+    UpdateDuckDBDrapeApiPoints(
+        g_duckDBCommittedPointIds,
+        pointGeometries,
+        "duckdb-committed-point",
+        dp::Color(219, 39, 119, 240),
+        10.0f);
+    g_framework->GetDrapeApi().Invalidate();
+
+    g_duckDBRenderPublished = true;
+    g_lastDuckDBRenderableFeatureKeys = std::move(featureKeys);
+    g_lastDuckDBRenderRefresh = std::chrono::steady_clock::now();
+    WakeRenderer();
+    return static_cast<int32_t>(lineGeometries.size() + pointGeometries.size());
+}
+}  // namespace
+
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_refresh_render_layers(void) {
+    return RefreshDuckDBRenderLayersInternal();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_set_edit_handles_from_wkt(const char* geometryWkt) {
+    auto geometries = ParseWktMercatorGeometries(geometryWkt);
+    DuckDBInteractionLineStyle style;
+    style.color = dp::Color(219, 39, 119, 245);
+    style.dashed = false;
+    UpdateDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds, geometries, "duckdb-interaction", style);
+    UpdateDuckDBDrapeApiPoints(
+        g_duckDBInteractionPointIds,
+        FlattenGeometryPoints(geometries),
+        "duckdb-interaction-point",
+        dp::Color(219, 39, 119, 245),
+        9.0f);
+    AGUS_DEBUG_LOG(
+        "[AgusMapsFlutter] DuckDB interaction geometry: mode=2 geometries=%zu renderer=DrapeApiLineData depthTest=0 lineWidth=%.2f dashed=0 platform=windows\n",
+        geometries.size(),
+        style.width);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_set_interaction_geometry_from_wkt(
+    int32_t interactionMode,
+    const char* geometryWkt) {
+    if (interactionMode == 0 || geometryWkt == nullptr || *geometryWkt == '\0') {
+        ClearDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds);
+        ClearDuckDBDrapeApiLines(g_duckDBInteractionPointIds);
+        WakeRenderer();
+        return;
+    }
+    DuckDBInteractionLineStyle style;
+    style.dashed = false;
+    if (interactionMode == 2) {
+        style.color = dp::Color(219, 39, 119, 245);
+        style.dashed = false;
+    }
+    auto geometries = ParseWktMercatorGeometries(geometryWkt);
+    UpdateDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds, geometries, "duckdb-interaction", style);
+    if (interactionMode == 2) {
+        UpdateDuckDBDrapeApiPoints(
+            g_duckDBInteractionPointIds,
+            FlattenGeometryPoints(geometries),
+            "duckdb-interaction-point",
+            dp::Color(219, 39, 119, 245),
+            9.0f);
+    } else {
+        ClearDuckDBDrapeApiLines(g_duckDBInteractionPointIds);
+    }
+    AGUS_DEBUG_LOG(
+        "[AgusMapsFlutter] DuckDB interaction geometry: mode=%d geometries=%zu renderer=DrapeApiLineData depthTest=0 lineWidth=%.2f dashed=%d platform=windows\n",
+        interactionMode,
+        geometries.size(),
+        style.width,
+        style.dashed ? 1 : 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_update_interaction_geometry(
+    int32_t interactionMode,
+    const char* geometryWkt,
+    int32_t red,
+    int32_t green,
+    int32_t blue,
+    double opacity,
+    double width,
+    int32_t dashed,
+    double dashLength,
+    double gapLength) {
+    if (interactionMode == 0 || geometryWkt == nullptr || *geometryWkt == '\0') {
+        ClearDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds);
+        ClearDuckDBDrapeApiLines(g_duckDBInteractionPointIds);
+        WakeRenderer();
+        return;
+    }
+    DuckDBInteractionLineStyle style;
+    int const clampedRed = std::max(0, std::min(red, 255));
+    int const clampedGreen = std::max(0, std::min(green, 255));
+    int const clampedBlue = std::max(0, std::min(blue, 255));
+    int const alpha = std::max(0, std::min(static_cast<int>(opacity * 255.0), 255));
+    style.color = dp::Color(clampedRed, clampedGreen, clampedBlue, alpha);
+    style.width = static_cast<float>(std::max(0.5, std::min(width, 8.0)));
+    style.dashed = dashed != 0;
+    style.dashLength = std::max(1.0, dashLength);
+    style.gapLength = std::max(1.0, gapLength);
+    auto geometries = ParseWktMercatorGeometries(geometryWkt);
+    UpdateDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds, geometries, "duckdb-interaction", style);
+    if (interactionMode == 2) {
+        UpdateDuckDBDrapeApiPoints(
+            g_duckDBInteractionPointIds,
+            FlattenGeometryPoints(geometries),
+            "duckdb-interaction-point",
+            style.color,
+            std::max(7.0f, style.width * 2.5f));
+    } else {
+        ClearDuckDBDrapeApiLines(g_duckDBInteractionPointIds);
+    }
+    AGUS_DEBUG_LOG(
+        "[AgusMapsFlutter] DuckDB interaction geometry: mode=%d geometries=%zu renderer=DrapeApiLineData depthTest=0 lineWidth=%.2f opacity=%d dashed=%d platform=windows\n",
+        interactionMode,
+        geometries.size(),
+        style.width,
+        alpha,
+        style.dashed ? 1 : 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_clear_edit_handles(void) {
+    ClearDuckDBDrapeApiLines(g_duckDBInteractionDrapeLineIds);
+    ClearDuckDBDrapeApiLines(g_duckDBInteractionPointIds);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void agus_duckdb_set_rendering_enabled(int32_t enabled) {
+    if (enabled != 0) {
+        {
+            std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+            g_duckDBRenderingEnabled = true;
+        }
+        RefreshDuckDBRenderLayersInternal();
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_duckDBRenderMutex);
+    g_duckDBRenderingEnabled = false;
+    g_duckDBRenderPublished = false;
+    g_lastDuckDBRenderableFeatureKeys.clear();
+    ClearDuckDBDrapeApiLines(g_duckDBCommittedDrapeLineIds);
+    ClearDuckDBDrapeApiLines(g_duckDBCommittedPointIds);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_zoom_in(int animated) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_framework->Scale(Framework::SCALE_MAG_LIGHT, animated != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_zoom_out(int animated) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_framework->Scale(Framework::SCALE_MIN_LIGHT, animated != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT double comaps_get_current_bearing(void) {
+    return g_currentBearingDegrees;
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_bearing(double degrees, int animated) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_currentBearingDegrees = NormalizeBearingDegrees(degrees);
+    g_framework->Rotate(g_currentBearingDegrees * kRadiansPerDegree, animated != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_reset_bearing(int animated) {
+    comaps_set_bearing(0.0, animated);
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_3d_buildings_enabled(int enabled) {
+    g_3dBuildingsEnabled = enabled != 0;
+    if (!g_framework) {
+        return;
+    }
+    g_framework->Allow3dMode(false, g_3dBuildingsEnabled);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_3d_buildings_enabled(void) {
+    return g_3dBuildingsEnabled ? 1 : 0;
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_map_theme(int dark) {
+    if (!g_framework) {
+        return;
+    }
+    auto const currentStyle = g_framework->GetMapStyle();
+    ApplyRuntimeMapStyle(dark != 0
+        ? GetDarkMapStyleVariant(currentStyle)
+        : GetLightMapStyleVariant(currentStyle));
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int comaps_get_map_theme_is_dark(void) {
+    if (!g_framework) {
+        return 0;
+    }
+    return MapStyleIsDark(g_framework->GetMapStyle()) ? 1 : 0;
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_outdoors_enabled(int enabled) {
+    if (!g_framework) {
+        return;
+    }
+    if (enabled) {
+        SetSubwayEnabledInternal(false);
+    }
+    SetOutdoorsEnabledInternal(enabled != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_isolines_enabled(int enabled) {
+    if (!g_framework) {
+        return;
+    }
+    if (enabled) {
+        SetSubwayEnabledInternal(false);
+    }
+    SetIsolinesEnabledInternal(enabled != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_subway_enabled(int enabled) {
+    SetSubwayEnabledInternal(enabled != 0);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_get_map_layer_state(int* outdoors, int* isolines, int* subway) {
+    if (outdoors) {
+        *outdoors = g_outdoorsEnabled ? 1 : 0;
+    }
+    if (isolines) {
+        *isolines = g_isolinesEnabled ? 1 : 0;
+    }
+    if (subway) {
+        *subway = g_subwayEnabled ? 1 : 0;
+    }
+}
+
+FFI_PLUGIN_EXPORT void comaps_set_map_language(const char* languageCode) {
+    if (!g_framework) {
+        return;
+    }
+    auto engine = g_framework->GetDrapeEngine();
+    if (!engine) {
+        return;
+    }
+    auto languageIndex = localisation::GetMapLanguageIndex();
+    if (languageCode && *languageCode) {
+        auto const requestedIndex =
+            localisation::ConvertLanguageCodeToLanguageIndex(languageCode);
+        if (requestedIndex != localisation::kUnsupportedLanguageIndex) {
+            languageIndex = requestedIndex;
+        }
+    }
+    engine->SetMapLangIndex(languageIndex);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_set_router(int32_t routerType) {
+    auto const result = agus::navigation::SetRouter(g_framework.get(), routerType);
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_router(void) {
+    return agus::navigation::GetRouter(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_add_route_point(
+    int32_t markType, const char* title, const char* subtitle, double lat,
+    double lon, int32_t intermediateIndex, int32_t isMyPosition,
+    int32_t reorderIntermediatePoints) {
+    auto const result = agus::navigation::AddRoutePoint(
+        g_framework.get(), markType, title, subtitle, lat, lon,
+        intermediateIndex, isMyPosition, reorderIntermediatePoints);
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_remove_route_point(
+    int32_t markType, int32_t intermediateIndex) {
+    agus::navigation::RemoveRoutePoint(g_framework.get(), markType, intermediateIndex);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_clear_route_points(void) {
+    agus::navigation::ClearRoutePoints(g_framework.get());
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_build_route(void) {
+    auto const result = agus::navigation::BuildRoute(g_framework.get());
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route(void) {
+    auto const result = agus::navigation::FollowRoute(g_framework.get());
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints) {
+    agus::navigation::CloseRoute(g_framework.get(), removeRoutePoints);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_active(void) {
+    return agus::navigation::IsActive(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_built(void) {
+    return agus::navigation::IsBuilt(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_building(void) {
+    return agus::navigation::IsBuilding(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_following(void) {
+    return agus::navigation::IsFollowing(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT AgusNavigationStatus* comaps_navigation_copy_status(void) {
+    return agus::navigation::CopyStatus(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_status_free(AgusNavigationStatus* status) {
+    agus::navigation::FreeStatus(status);
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_measurement_units(int32_t units) {
+    agus::navigation::SetMeasurementUnits(g_framework.get(), units);
+    WakeRenderer();
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_measurement_units(void) {
+    return agus::navigation::GetMeasurementUnits();
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_turn_notifications_enabled(int32_t enabled) {
+    agus::navigation::SetTurnNotificationsEnabled(g_framework.get(), enabled);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_turn_notifications_enabled(void) {
+    return agus::navigation::GetTurnNotificationsEnabled(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_turn_notifications_locale(const char* locale) {
+    agus::navigation::SetTurnNotificationsLocale(g_framework.get(), locale);
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_speed_camera_mode(int32_t mode) {
+    agus::navigation::SetSpeedCameraMode(g_framework.get(), mode);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_speed_camera_mode(void) {
+    return agus::navigation::GetSpeedCameraMode(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_avoid_routing_options(int32_t mask) {
+    agus::navigation::SetAvoidRoutingOptions(mask);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_avoid_routing_options(void) {
+    return agus::navigation::GetAvoidRoutingOptions();
+}
+
 FFI_PLUGIN_EXPORT void comaps_invalidate(void) {
     LOG(LINFO, ("comaps_invalidate called"));
     
@@ -538,7 +1525,7 @@ FFI_PLUGIN_EXPORT void comaps_force_redraw(void) {
         // UpdateMapStyle clears all render groups and invalidates the read manager,
         // which forces a complete tile reload when the render loop processes it.
         // This is the cleanest way to force a full redraw.
-        g_framework->SetMapStyle(g_framework->GetMapStyle());
+        ApplyRuntimeMapStyle(g_framework->GetMapStyle());
         
         // MakeFrameActive ensures the render loop stays active (isActiveFrame=true)
         // long enough to process the style update and request new tiles.
@@ -582,6 +1569,7 @@ FFI_PLUGIN_EXPORT void comaps_touch(int type, int id1, float x1, float y1, int i
     }
     
     g_framework->TouchEvent(event);
+    RequestActiveRenderFrame();
 }
 
 FFI_PLUGIN_EXPORT void comaps_scale(double factor, double pixelX, double pixelY, int animated) {
@@ -592,6 +1580,7 @@ FFI_PLUGIN_EXPORT void comaps_scale(double factor, double pixelX, double pixelY,
     // Scale the map by the given factor, centered on the pixel point
     // This is the preferred method for scroll wheel zoom on desktop
     g_framework->Scale(factor, m2::PointD(pixelX, pixelY), animated != 0);
+    RequestActiveRenderFrame();
 }
 
 FFI_PLUGIN_EXPORT void comaps_scroll(double distanceX, double distanceY) {
@@ -601,6 +1590,7 @@ FFI_PLUGIN_EXPORT void comaps_scroll(double distanceX, double distanceY) {
     
     // Scroll the map by the given distance
     g_framework->Scroll(distanceX, distanceY);
+    RequestActiveRenderFrame();
 }
 
 FFI_PLUGIN_EXPORT int comaps_place_page_has_data(void) {
@@ -668,6 +1658,31 @@ FFI_PLUGIN_EXPORT void comaps_place_page_clear_selection(void) {
     g_framework->DeactivateMapSelection();
 }
 
+FFI_PLUGIN_EXPORT int32_t comaps_search_start(const char* query, const char* locale,
+                                              int32_t interactive, int32_t isCategory) {
+    return agus_search_bridge::StartSearch(g_framework.get(), query, locale, interactive, isCategory);
+}
+
+FFI_PLUGIN_EXPORT AgusSearchResults* comaps_search_copy_results(void) {
+    return agus_search_bridge::CopyResults();
+}
+
+FFI_PLUGIN_EXPORT void comaps_search_results_free(AgusSearchResults* data) {
+    agus_search_bridge::FreeResults(data);
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_search_show_result(int32_t index) {
+    int32_t const status = agus_search_bridge::ShowResult(g_framework.get(), index);
+    if (status > 0) {
+        WakeRenderer();
+    }
+    return status;
+}
+
+FFI_PLUGIN_EXPORT void comaps_search_cancel(void) {
+    agus_search_bridge::Cancel(g_framework.get());
+}
+
 // Helper function to normalize path separators (convert / to \ on Windows)
 static std::string NormalizePath(const char* path) {
     std::string normalized(path);
@@ -687,10 +1702,10 @@ FFI_PLUGIN_EXPORT int comaps_register_single_map(const char* fullPath) {
     
     snprintf(msg, sizeof(msg), "[AgusMapsFlutter] comaps_register_single_map: %s (normalized: %s)\n", 
              fullPath, normalizedPath.c_str());
-    OutputDebugStringA(msg);
+    AGUS_DEBUG_LOG("%s", msg);
     
     if (!g_framework) {
-        OutputDebugStringA("[AgusMapsFlutter] Framework not initialized\n");
+        AgusWriteLog("[AgusMapsFlutter] Framework not initialized\n");
         return -1;
     }
     
@@ -709,16 +1724,16 @@ FFI_PLUGIN_EXPORT int comaps_register_single_map_with_version(const char* fullPa
 
     snprintf(msg, sizeof(msg), "[AgusMapsFlutter] comaps_register_single_map_with_version: %s (normalized: %s, version=%lld)\n",
         fullPath, normalizedPath, static_cast<long long>(version));
-    OutputDebugStringA(msg);
+    AGUS_DEBUG_LOG("%s", msg);
 
     if (!g_framework) {
-        OutputDebugStringA("[AgusMapsFlutter] comaps_register_single_map_with_version: Framework not initialized\n");
+        AgusWriteLog("[AgusMapsFlutter] comaps_register_single_map_with_version: Framework not initialized\n");
         return -1;
     }
 
     std::string path(normalizedPath);
     if (path.empty()) {
-        OutputDebugStringA("[AgusMapsFlutter] comaps_register_single_map_with_version: Empty path\n");
+        AgusWriteLog("[AgusMapsFlutter] comaps_register_single_map_with_version: Empty path\n");
         return -2;
     }
 
@@ -733,20 +1748,18 @@ FFI_PLUGIN_EXPORT int comaps_register_single_map_with_version(const char* fullPa
     auto result = g_framework->RegisterMap(file);
     if (result.second == MwmSet::RegResult::Success) {
         snprintf(msg, sizeof(msg), "[AgusMapsFlutter] comaps_register_single_map_with_version: Successfully registered %s\n", fullPath);
-        OutputDebugStringA(msg);
+        AGUS_DEBUG_LOG("%s", msg);
         return 0;
     } else {
         snprintf(msg, sizeof(msg), "[AgusMapsFlutter] comaps_register_single_map_with_version: Failed to register %s, result=%d\n",
             fullPath, static_cast<int>(result.second));
-        OutputDebugStringA(msg);
+        AgusWriteLog(msg);
         return static_cast<int>(result.second);
     }
 }
 
 FFI_PLUGIN_EXPORT void comaps_shutdown(void) {
-    OutputDebugStringA("[AgusMapsFlutter] comaps_shutdown called\n");
-    std::fprintf(stderr, "[AgusMapsFlutter] comaps_shutdown called\n");
-    std::fflush(stderr);
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] comaps_shutdown called\n");
     
     std::lock_guard<std::mutex> lock(g_mutex);
     
@@ -764,11 +1777,11 @@ FFI_PLUGIN_EXPORT void comaps_shutdown(void) {
     g_drapeEngineCreated = false;
     g_platformInitialized = false;
     
-    OutputDebugStringA("[AgusMapsFlutter] Shutdown complete\n");
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] Shutdown complete\n");
 }
 
 FFI_PLUGIN_EXPORT int comaps_deregister_map(const char* fullPath) {
-    OutputDebugStringA("[AgusMapsFlutter] comaps_deregister_map: not implemented\n");
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] comaps_deregister_map: not implemented\n");
     return -1;
 }
 
@@ -784,10 +1797,11 @@ FFI_PLUGIN_EXPORT int comaps_get_registered_maps_count(void) {
 }
 
 FFI_PLUGIN_EXPORT void comaps_debug_list_mwms(void) {
-    OutputDebugStringA("[AgusMapsFlutter] === DEBUG: Listing all registered MWMs ===\n");
+#if !AGUS_RELEASE_BUILD
+    AgusWriteLog("[AgusMapsFlutter] === DEBUG: Listing all registered MWMs ===\n");
     
     if (!g_framework) {
-        OutputDebugStringA("[AgusMapsFlutter] Framework not initialized\n");
+        AgusWriteLog("[AgusMapsFlutter] Framework not initialized\n");
         return;
     }
     
@@ -797,7 +1811,7 @@ FFI_PLUGIN_EXPORT void comaps_debug_list_mwms(void) {
     
     char msg[256];
     snprintf(msg, sizeof(msg), "[AgusMapsFlutter] Total MWMs registered: %zu\n", mwms.size());
-    OutputDebugStringA(msg);
+    AgusWriteLog(msg);
     
     for (auto const & mwmInfo : mwms) {
         if (mwmInfo) {
@@ -805,24 +1819,26 @@ FFI_PLUGIN_EXPORT void comaps_debug_list_mwms(void) {
             snprintf(msg, sizeof(msg), "[AgusMapsFlutter]   MWM: %s, bounds: [%.4f, %.4f] - [%.4f, %.4f]\n",
                      mwmInfo->GetCountryName().c_str(),
                      rect.minX(), rect.minY(), rect.maxX(), rect.maxY());
-            OutputDebugStringA(msg);
+            AgusWriteLog(msg);
         }
     }
+#endif
 }
 
 FFI_PLUGIN_EXPORT void comaps_debug_check_point(double lat, double lon) {
+#if !AGUS_RELEASE_BUILD
     char msg[256];
     snprintf(msg, sizeof(msg), "[AgusMapsFlutter] comaps_debug_check_point: lat=%.6f, lon=%.6f\n", lat, lon);
-    OutputDebugStringA(msg);
+    AgusWriteLog(msg);
     
     if (!g_framework) {
-        OutputDebugStringA("[AgusMapsFlutter] Framework not initialized\n");
+        AgusWriteLog("[AgusMapsFlutter] Framework not initialized\n");
         return;
     }
     
     m2::PointD const mercatorPt = mercator::FromLatLon(lat, lon);
     snprintf(msg, sizeof(msg), "[AgusMapsFlutter] Mercator coords: (%.4f, %.4f)\n", mercatorPt.x, mercatorPt.y);
-    OutputDebugStringA(msg);
+    AgusWriteLog(msg);
     
     auto const & dataSource = g_framework->GetDataSource();
     std::vector<std::shared_ptr<MwmInfo>> mwms;
@@ -832,12 +1848,13 @@ FFI_PLUGIN_EXPORT void comaps_debug_check_point(double lat, double lon) {
         if (mwmInfo && mwmInfo->m_bordersRect.IsPointInside(mercatorPt)) {
             snprintf(msg, sizeof(msg), "[AgusMapsFlutter] Point IS covered by MWM: %s\n",
                      mwmInfo->GetCountryName().c_str());
-            OutputDebugStringA(msg);
+            AgusWriteLog(msg);
             return;
         }
     }
     
-    OutputDebugStringA("[AgusMapsFlutter] Point is NOT covered by any registered MWM\n");
+    AgusWriteLog("[AgusMapsFlutter] Point is NOT covered by any registered MWM\n");
+#endif
 }
 
 #pragma endregion
@@ -847,7 +1864,7 @@ FFI_PLUGIN_EXPORT void comaps_debug_check_point(double lat, double lon) {
 /// Set the frame ready callback
 FFI_PLUGIN_EXPORT void agus_set_frame_ready_callback(FrameReadyCallback callback) {
     g_frameReadyCallback = callback;
-    OutputDebugStringA("[AgusMapsFlutter] Frame ready callback set\n");
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] Frame ready callback set\n");
 }
 
 /// Called when the native surface is created
@@ -856,16 +1873,12 @@ FFI_PLUGIN_EXPORT void agus_set_frame_ready_callback(FrameReadyCallback callback
 /// @param density Screen density / DPI scale
 FFI_PLUGIN_EXPORT void agus_native_create_surface(int32_t width, int32_t height, float density) {
     ensureLoggingConfigured();
-    
-    char msg[256];
-    snprintf(msg, sizeof(msg), "[AgusMapsFlutter] agus_native_create_surface: %dx%d, density=%.2f\n",
-             width, height, density);
-    OutputDebugStringA(msg);
-    std::fprintf(stderr, "%s", msg);
-    std::fflush(stderr);
+
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] agus_native_create_surface: %dx%d, density=%.2f\n",
+                   width, height, density);
     
     if (!g_platformInitialized) {
-        OutputDebugStringA("[AgusMapsFlutter] ERROR: Platform not initialized! Call comaps_init_paths first.\n");
+        AgusWriteLog("[AgusMapsFlutter] ERROR: Platform not initialized! Call comaps_init_paths first.\n");
         return;
     }
     
@@ -877,25 +1890,26 @@ FFI_PLUGIN_EXPORT void agus_native_create_surface(int32_t width, int32_t height,
     
     // Create Framework on this thread if not already created
     if (!g_framework) {
-        OutputDebugStringA("[AgusMapsFlutter] Creating Framework...\n");
+        AGUS_DEBUG_LOG("[AgusMapsFlutter] Creating Framework...\n");
         
         FrameworkParams params;
         params.m_enableDiffs = false;
         params.m_numSearchAPIThreads = 1;
         
         g_framework = std::make_unique<Framework>(params, false /* loadMaps */);
-        OutputDebugStringA("[AgusMapsFlutter] Framework created\n");
+        SetViewportTracking();
+        AGUS_DEBUG_LOG("[AgusMapsFlutter] Framework created\n");
         
         // Register maps
         g_framework->RegisterAllMaps();
-        OutputDebugStringA("[AgusMapsFlutter] Maps registered\n");
+        AGUS_DEBUG_LOG("[AgusMapsFlutter] Maps registered\n");
     }
     
     // Create WGL context factory for OpenGL rendering
     g_wglFactory = new agus::AgusWglContextFactory(width, height);
     
     if (!g_wglFactory->GetDrawContext()) {
-        OutputDebugStringA("[AgusMapsFlutter] ERROR: Failed to create WGL context factory\n");
+        AgusWriteLog("[AgusMapsFlutter] ERROR: Failed to create WGL context factory\n");
         delete g_wglFactory;
         g_wglFactory = nullptr;
         return;
@@ -905,7 +1919,7 @@ FFI_PLUGIN_EXPORT void agus_native_create_surface(int32_t width, int32_t height,
     g_wglFactory->SetFrameCallback([]() {
         notifyFlutterFrameReady();
     });
-    OutputDebugStringA("[AgusMapsFlutter] WGL factory frame callback set\n");
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] WGL factory frame callback set\n");
     
     // Set keep-alive callback to prevent render loop from suspending during tile loading.
     // This calls Framework::MakeFrameActive() which sends an ActiveFrameEvent to keep
@@ -916,7 +1930,7 @@ FFI_PLUGIN_EXPORT void agus_native_create_surface(int32_t width, int32_t height,
             g_framework->MakeFrameActive();
         }
     });
-    OutputDebugStringA("[AgusMapsFlutter] WGL factory keep-alive callback set\n");
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] WGL factory keep-alive callback set\n");
     
     // Wrap in ThreadSafeFactory for thread-safe context access
     g_threadSafeFactory = make_unique_dp<dp::ThreadSafeFactory>(g_wglFactory);
@@ -927,7 +1941,7 @@ FFI_PLUGIN_EXPORT void agus_native_create_surface(int32_t width, int32_t height,
     // Enable rendering
     if (g_framework && g_drapeEngineCreated) {
         g_framework->SetRenderingEnabled(make_ref(g_threadSafeFactory));
-        OutputDebugStringA("[AgusMapsFlutter] Rendering enabled\n");
+        AGUS_DEBUG_LOG("[AgusMapsFlutter] Rendering enabled\n");
     }
 }
 
@@ -976,7 +1990,7 @@ FFI_PLUGIN_EXPORT void agus_native_set_visual_scale(float density) {
 
 /// Called when the surface is destroyed
 FFI_PLUGIN_EXPORT void agus_native_on_surface_destroyed(void) {
-    OutputDebugStringA("[AgusMapsFlutter] agus_native_on_surface_destroyed\n");
+    AGUS_DEBUG_LOG("[AgusMapsFlutter] agus_native_on_surface_destroyed\n");
     
     if (g_framework) {
         g_framework->SetRenderingDisabled(true /* destroySurface */);
@@ -996,6 +2010,24 @@ FFI_PLUGIN_EXPORT void* agus_get_shared_texture_handle(void) {
     return nullptr;
 }
 
+FFI_PLUGIN_EXPORT int agus_get_shared_texture_descriptor_info(void** handle, int32_t* width, int32_t* height) {
+    if (!g_wglFactory || !handle || !width || !height) {
+        return 0;
+    }
+
+    HANDLE sharedHandle = nullptr;
+    int textureWidth = 0;
+    int textureHeight = 0;
+    if (!g_wglFactory->GetSharedTextureInfo(&sharedHandle, &textureWidth, &textureHeight)) {
+        return 0;
+    }
+
+    *handle = sharedHandle;
+    *width = static_cast<int32_t>(textureWidth);
+    *height = static_cast<int32_t>(textureHeight);
+    return 1;
+}
+
 /// Get the D3D11 device pointer for Flutter
 /// @return ID3D11Device pointer
 FFI_PLUGIN_EXPORT void* agus_get_d3d11_device(void) {
@@ -1012,6 +2044,24 @@ FFI_PLUGIN_EXPORT void* agus_get_d3d11_texture(void) {
         return g_wglFactory->GetD3D11Texture();
     }
     return nullptr;
+}
+
+FFI_PLUGIN_EXPORT int agus_get_d3d11_texture_info(void** texture, int32_t* width, int32_t* height) {
+    if (!g_wglFactory || !texture || !width || !height) {
+        return 0;
+    }
+
+    ID3D11Texture2D* d3dTexture = nullptr;
+    int textureWidth = 0;
+    int textureHeight = 0;
+    if (!g_wglFactory->AddRefSharedTextureInfo(&d3dTexture, &textureWidth, &textureHeight)) {
+        return 0;
+    }
+
+    *texture = d3dTexture;
+    *width = static_cast<int32_t>(textureWidth);
+    *height = static_cast<int32_t>(textureHeight);
+    return 1;
 }
 
 /// Render a single frame (called by Flutter's texture system)

@@ -1,8 +1,46 @@
 ## Unreleased
 
+### Build System & CI/CD
+
+* **CoMaps dependency refresh**: GitHub Actions and build-tool documentation now use `COMAPS_TAG` v2026.04.23-19.
+
+* **Apple CI header bundle fix**: The shared CoMaps header bundle now includes and validates `3party/ankerl/unordered_dense.h`, fixing iOS simulator CI builds that compile against prebuilt XCFrameworks after hiding the full `thirdparty` source checkout.
+
+### Apple Build & Tooling
+
+* **macOS contributor build stability**: Native macOS builds now apply CoMaps patches in sorted order, fail fast on CMake configure/build failures, clean stale XCFramework outputs before packaging, and build Metal shaders before CocoaPods setup. The example debug app was verified with `flutter build macos --debug`.
+
+* **iOS Xcode workspace fix**: Regenerated the iOS CocoaPods workspace and added the missing Profile xcconfig wiring so Xcode no longer looks for stale generated sources such as `ios/Classes/AgusMapsApi.g.swift`. The iOS debug build was verified with `flutter build ios --debug --no-codesign`, and the simulator workflow remains supported with `flutter build ios --simulator --debug`.
+
+* **iOS native XCFramework fix**: The CoMaps platform patch now builds iOS Ed25519 verification with Monocypher instead of `ed25519_apple.mm`, avoiding the Xcode-generated `platform-Swift.h` dependency that is unavailable in the headless CMake/XCFramework build.
+
+* **macOS place page parity**: macOS now emits the same readable metadata tags as iOS for POI place pages, restoring details such as Wikipedia, IATA, phone, elevation, and internet access in the Flutter sheet.
+
+* **macOS place page localization**: macOS now localizes raw POI type tokens in place page subtitles, so strings such as `aeroway-aerodrome-international` render as user-facing labels while preserving suffix details such as IATA codes, elevation, and internet access.
+
+* **iOS place page localization parity**: iOS now applies the same raw POI type subtitle normalization as macOS, so hyphenated CoMaps type keys such as `aeroway-aerodrome` render as localized labels.
+
+* **macOS release runtime cleanup**: Release builds now suppress development-only frame/render diagnostics, expose `comaps_set_locale` for the Dart locale API, avoid duplicate native map auto-registration during surface creation, and exit the app process from the termination notification so `flutter run` can finish when the macOS app quits.
+
+### Downloads
+
+* **Hierarchical regions**: The Flutter downloads UI now preserves the CoMaps `countries.txt` hierarchy, showing expandable countries/regions while downloading group selections as their underlying leaf `.mwm` files.
+
+* **Downloads layout fix**: Header status chips and the expanded mirror selector now use overflow-safe layouts, fixing the bottom `RenderFlex` overflow seen on smaller macOS windows.
+
+* **Downloads cache migration**: The downloads cache key is now `downloads_cache_v2`, forcing stale flat region caches to refresh into the hierarchical CoMaps region tree.
+
+* **CoMaps mirror alignment**: Runtime mirror defaults now match the current CoMaps source list and merge any additional metaserver hosts before probing availability.
+
+### Assets
+
+* **Place page data validation**: Added `subtypes.csv` to the required CoMaps data set and made iOS/macOS extraction validate essential files before trusting `.comaps_data_extracted`, preventing crashes when opening POI place pages after an incomplete asset extraction.
+
+* **macOS symbol atlas validation**: macOS extraction now checks required symbol entries across light/dark and DPI-specific atlases before reusing cached data, forcing re-extraction when stale atlases would otherwise produce missing-symbol render warnings.
+
 ### Fixes
 
-* **iOS Simulator map rendering**: The map no longer aborts on the iOS Simulator with "Target OS is incompatible: library was not compiled for the simulator". The build now also compiles the Metal shaders for the simulator into `shaders_metal_sim.metallib`. The iOS SDK archive and the podspec resource bundle ship it next to `shaders_metal.metallib`. The patched shader loader (`0017`) picks the simulator library when built for the simulator. Device builds load `shaders_metal.metallib` as before.
+* **iOS Simulator map rendering**: The map no longer aborts on the iOS Simulator with "Target OS is incompatible: library was not compiled for the simulator". The build now also compiles the Metal shaders for the simulator into `shaders_metal_sim.metallib`. The build tool copies it next to `shaders_metal.metallib` into `ios/Resources` (CocoaPods resource bundle) and the SwiftPM target resources. The patched shader loader (`0017`) picks the simulator library when built for the simulator. Device builds load `shaders_metal.metallib` as before.
 
 ## 0.1.24
 

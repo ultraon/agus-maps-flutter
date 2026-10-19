@@ -1,3 +1,5 @@
+#pragma once
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -45,6 +47,67 @@ FFI_PLUGIN_EXPORT void comaps_load_map_path(const char* path);
 FFI_PLUGIN_EXPORT void comaps_set_locale(const char* localeTag);
 
 FFI_PLUGIN_EXPORT void comaps_set_view(double lat, double lon, int zoom);
+
+// Get current viewport center coordinates in WGS84.
+// Returns 1 when values were written, 0 when the framework is not ready.
+FFI_PLUGIN_EXPORT int comaps_get_viewport_center(double* lat, double* lon);
+
+// Get the current integer draw scale/zoom level, or -1 when unavailable.
+FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void);
+
+// Converts physical screen coordinates to WGS84 coordinates using the latest
+// native viewport. Returns 1 when values were written.
+FFI_PLUGIN_EXPORT int comaps_screen_to_latlon(
+	double physical_x,
+	double physical_y,
+	double* lat,
+	double* lon);
+
+// Updates the native map pointer tracker and converts it to WGS84 coordinates.
+// Returns 1 when values were written.
+FFI_PLUGIN_EXPORT int comaps_update_map_pointer(
+	double physical_x,
+	double physical_y,
+	int inside_map,
+	double* lat,
+	double* lon);
+
+// Converts WGS84 coordinates to physical screen coordinates using the latest
+// native viewport. Returns 1 when values were written.
+FFI_PLUGIN_EXPORT int comaps_latlon_to_screen(
+	double lat,
+	double lon,
+	double* physical_x,
+	double* physical_y);
+
+// Relative zoom controls centered on the visible viewport.
+FFI_PLUGIN_EXPORT void comaps_zoom_in(int animated);
+FFI_PLUGIN_EXPORT void comaps_zoom_out(int animated);
+
+// Map bearing in degrees where 0 is north-up.
+FFI_PLUGIN_EXPORT double comaps_get_current_bearing(void);
+FFI_PLUGIN_EXPORT void comaps_set_bearing(double degrees, int animated);
+FFI_PLUGIN_EXPORT void comaps_reset_bearing(int animated);
+
+// Enable/disable runtime 3D building rendering.
+// Flutter owns persistence for this setting; the native bridge only applies
+// the current process state to Drape.
+FFI_PLUGIN_EXPORT void comaps_set_3d_buildings_enabled(int enabled);
+FFI_PLUGIN_EXPORT int comaps_get_3d_buildings_enabled(void);
+
+// Map theme: 0 = light, 1 = dark. Auto mode is resolved by Dart.
+FFI_PLUGIN_EXPORT void comaps_set_map_theme(int dark);
+FFI_PLUGIN_EXPORT int comaps_get_map_theme_is_dark(void);
+
+// Overlay/style layers matching CoMaps mobile behavior:
+// outdoors and isolines may be enabled together; subway/transit disables both.
+FFI_PLUGIN_EXPORT void comaps_set_outdoors_enabled(int enabled);
+FFI_PLUGIN_EXPORT void comaps_set_isolines_enabled(int enabled);
+FFI_PLUGIN_EXPORT void comaps_set_subway_enabled(int enabled);
+FFI_PLUGIN_EXPORT void comaps_get_map_layer_state(int* outdoors, int* isolines, int* subway);
+
+// Map label language code. Empty/null = auto; "default" = local/native names.
+FFI_PLUGIN_EXPORT void comaps_set_map_language(const char* languageCode);
 
 // Invalidate the current viewport to force tile reload
 FFI_PLUGIN_EXPORT void comaps_invalidate(void);
@@ -128,6 +191,127 @@ FFI_PLUGIN_EXPORT void comaps_place_page_free(AgusPlacePageData* data);
 // Clear the current place page selection
 FFI_PLUGIN_EXPORT void comaps_place_page_clear_selection(void);
 
+// Search result types mirrored from search::Result::Type.
+// 0=Feature, 1=LatLon, 2=PureSuggest, 3=SuggestFromFeature, 4=Postcode.
+typedef struct {
+	int32_t index;
+	int32_t result_type;
+	int32_t is_suggestion;
+	int32_t has_point;
+	const char* title;
+	const char* subtitle;
+	const char* address;
+	const char* suggestion;
+	double lat;
+	double lon;
+} AgusSearchResult;
+
+// Search snapshot status values:
+// 0=idle, 1=running, 2=completed, 3=cancelled, 4=error.
+typedef struct {
+	int32_t generation;
+	int32_t status;
+	int32_t result_count;
+	AgusSearchResult* results;
+} AgusSearchResults;
+
+// Start native CoMaps search. Returns the search generation, or a negative
+// value if the framework/query is not ready. When interactive is non-zero,
+// CoMaps also starts search-in-viewport for native map result marks.
+FFI_PLUGIN_EXPORT int32_t comaps_search_start(
+	const char* query,
+	const char* locale,
+	int32_t interactive,
+	int32_t isCategory);
+
+// Returns a heap-allocated snapshot of the latest native search state.
+// Call comaps_search_results_free when done.
+FFI_PLUGIN_EXPORT AgusSearchResults* comaps_search_copy_results(void);
+
+// Frees a snapshot allocated by comaps_search_copy_results.
+FFI_PLUGIN_EXPORT void comaps_search_results_free(AgusSearchResults* data);
+
+// Selects a non-suggestion result from the latest native search result list.
+// Returns 1 on success, 0 if the index points to a suggestion, or negative on
+// invalid state/index.
+FFI_PLUGIN_EXPORT int32_t comaps_search_show_result(int32_t index);
+
+// Cancels active native search requests and clears cached search results.
+FFI_PLUGIN_EXPORT void comaps_search_cancel(void);
+
+// Navigation route point types mirrored from RouteMarkType:
+// 0=Start, 1=Intermediate, 2=Finish.
+// Router types mirror routing::RouterType: 0=Vehicle, 1=Pedestrian,
+// 2=Bicycle, 3=Transit, 4=Ruler.
+// Measurement units mirror measurement_utils::Units: 0=Metric, 1=Imperial.
+// Speed camera modes mirror routing::SpeedCameraManagerMode:
+// 0=Auto, 1=Always, 2=Never.
+// Avoid route options are a bitmask of routing::RoutingOptions::Road values:
+// Toll=2, Motorway=4, Ferry=8, Dirty/unpaved=16.
+typedef struct {
+	int32_t is_active;
+	int32_t is_built;
+	int32_t is_building;
+	int32_t is_following;
+	int32_t is_valid;
+	int32_t has_following_info;
+	int32_t router_type;
+	int32_t route_session_state;
+	int32_t turn;
+	int32_t next_turn;
+	int32_t pedestrian_turn;
+	int32_t exit_number;
+	int32_t total_time_seconds;
+	double completion_percent;
+	double speed_limit_mps;
+	double distance_to_target;
+	int32_t distance_to_target_units;
+	double distance_to_turn;
+	int32_t distance_to_turn_units;
+	double distance_to_next_stop;
+	int32_t distance_to_next_stop_units;
+	int32_t time_to_next_stop_seconds;
+	int32_t index_of_next_stop;
+	const char* current_street;
+	const char* next_street;
+	const char* next_next_street;
+} AgusNavigationStatus;
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_set_router(int32_t routerType);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_router(void);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_add_route_point(
+	int32_t markType,
+	const char* title,
+	const char* subtitle,
+	double lat,
+	double lon,
+	int32_t intermediateIndex,
+	int32_t isMyPosition,
+	int32_t reorderIntermediatePoints);
+FFI_PLUGIN_EXPORT void comaps_navigation_remove_route_point(
+	int32_t markType,
+	int32_t intermediateIndex);
+FFI_PLUGIN_EXPORT void comaps_navigation_clear_route_points(void);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_build_route(void);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route(void);
+FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_active(void);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_built(void);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_building(void);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_following(void);
+FFI_PLUGIN_EXPORT AgusNavigationStatus* comaps_navigation_copy_status(void);
+FFI_PLUGIN_EXPORT void comaps_navigation_status_free(AgusNavigationStatus* status);
+
+FFI_PLUGIN_EXPORT void comaps_navigation_set_measurement_units(int32_t units);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_measurement_units(void);
+FFI_PLUGIN_EXPORT void comaps_navigation_set_turn_notifications_enabled(int32_t enabled);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_turn_notifications_enabled(void);
+FFI_PLUGIN_EXPORT void comaps_navigation_set_turn_notifications_locale(const char* locale);
+FFI_PLUGIN_EXPORT void comaps_navigation_set_speed_camera_mode(int32_t mode);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_speed_camera_mode(void);
+FFI_PLUGIN_EXPORT void comaps_navigation_set_avoid_routing_options(int32_t mask);
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_avoid_routing_options(void);
+
 // Scale (zoom) the map by a factor, centered on a specific pixel point.
 // factor: Zoom factor (>1 zooms in, <1 zooms out). Use exp(scrollDelta) for smooth zooming.
 // pixelX, pixelY: Screen coordinates to zoom towards (in physical pixels)
@@ -171,18 +355,6 @@ FFI_PLUGIN_EXPORT int comaps_deregister_map(const char* fullPath);
 FFI_PLUGIN_EXPORT int comaps_get_registered_maps_count(void);
 
 // =============================================================================
-// Viewport Query Functions
-// =============================================================================
-
-// Get current viewport center in WGS84 coordinates.
-// lat/lon are output pointers. Returns (0,0) if framework is not ready.
-FFI_PLUGIN_EXPORT void comaps_get_viewport_center(double* lat, double* lon);
-
-// Get current zoom level (draw scale).
-// Returns 0 if framework is not ready.
-FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void);
-
-// =============================================================================
 // Location Services
 // =============================================================================
 
@@ -224,6 +396,125 @@ FFI_PLUGIN_EXPORT void comaps_remove_custom_marker(int markerId);
 FFI_PLUGIN_EXPORT void comaps_clear_custom_markers(void);
 
 // =============================================================================
+// DuckDB Persistence Functions
+// =============================================================================
+
+// Returns the linked DuckDB library version, or an empty string when unavailable.
+FFI_PLUGIN_EXPORT const char* agus_duckdb_library_version(void);
+
+// Returns the last DuckDB bridge error message, or an empty string.
+FFI_PLUGIN_EXPORT const char* agus_duckdb_last_error(void);
+
+// Opens the app-instance DuckDB file at writablePath/agus_layers.duckdb.
+// Returns 1 on success, 0 on failure.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_open_app_database(const char* writablePath);
+
+// Closes the current app-instance DuckDB connection, if any.
+FFI_PLUGIN_EXPORT void agus_duckdb_close(void);
+
+// Returns 1 when the app-instance DuckDB connection is open.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_is_open(void);
+
+// Loads and verifies the required static extensions for layer storage/querying.
+// Returns 1 on success, 0 on failure.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_load_required_extensions(void);
+
+// Executes unrestricted SQL against the app-instance DuckDB connection.
+// Returns 1 on success, 0 on failure.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_execute(const char* sql);
+
+// Executes SQL and returns a JSON payload with columns, rows, and row_count.
+// Returns NULL on failure; call agus_duckdb_last_error() for diagnostics.
+// The returned pointer is owned by the bridge and remains valid until the next
+// DuckDB query-json call or bridge close/error mutation.
+FFI_PLUGIN_EXPORT const char* agus_duckdb_query_json(const char* sql);
+
+// Validates a query-layer SQL result contract without materializing rows.
+// Required columns are feature_id VARCHAR, geometry GEOMETRY, and properties JSON.
+// Optional style JSON and min_zoom/max_zoom/z_index INTEGER columns are checked
+// when present. Returns 1 on success, 0 on failure.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_validate_render_query(const char* sql);
+
+typedef struct {
+	char* layer_id;
+	char* feature_id;
+	char* geometry_kind;
+	char* geometry_wkt;
+	int32_t min_zoom;
+	int32_t max_zoom;
+	int32_t z_index;
+} AgusDuckDBRenderFeature;
+
+// Copies currently renderable DuckDB features for a WGS84 viewport and zoom.
+// The returned array and nested strings are owned by the caller and must be
+// released with agus_duckdb_free_render_features(). Nullable zoom values are
+// returned as -1.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_copy_render_features(
+		double min_lon,
+		double min_lat,
+		double max_lon,
+		double max_lat,
+		int32_t zoom,
+		AgusDuckDBRenderFeature** out_features,
+		int32_t* out_count);
+
+// Copies a page of currently renderable DuckDB features for a WGS84 viewport
+// and zoom. Use limit/offset to avoid one large render allocation.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_copy_render_features_page(
+		double min_lon,
+		double min_lat,
+		double max_lon,
+		double max_lat,
+		int32_t zoom,
+		int32_t limit,
+		int32_t offset,
+		AgusDuckDBRenderFeature** out_features,
+		int32_t* out_count);
+
+// Frees render features allocated by DuckDB render-feature copy APIs.
+FFI_PLUGIN_EXPORT void agus_duckdb_free_render_features(
+		AgusDuckDBRenderFeature* features,
+		int32_t count);
+
+// Android, macOS, and iOS wire DuckDB-backed rows into Drape user marks.
+// Returns the number of visible features submitted, or a negative value when
+// the map/DuckDB state is not ready. Other platforms will wire this later.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_refresh_render_layers(void);
+
+// Renders selected-feature edit handles in a separate native Drape user-mark
+// group. The WKT is parsed for lon/lat vertex pairs and is not persisted here.
+FFI_PLUGIN_EXPORT void agus_duckdb_set_edit_handles_from_wkt(const char* geometryWkt);
+// Native Drape interaction state: 0 = inactive, 1 = drawing, 2 = editing.
+// The WKT is transient interaction geometry; Dart/DuckDB still own persistence.
+FFI_PLUGIN_EXPORT void agus_duckdb_set_interaction_geometry_from_wkt(
+    int32_t interactionMode, const char* geometryWkt);
+// Styleable interaction geometry path used by the Pigeon host API.
+FFI_PLUGIN_EXPORT void agus_duckdb_update_interaction_geometry(
+    int32_t interactionMode,
+    const char* geometryWkt,
+    int32_t red,
+    int32_t green,
+    int32_t blue,
+    double opacity,
+    double width,
+    int32_t dashed,
+    double dashLength,
+    double gapLength);
+FFI_PLUGIN_EXPORT void agus_duckdb_clear_edit_handles(void);
+
+// Enables or disables viewport-driven DuckDB render refreshes on platforms that
+// implement native Drape integration.
+FFI_PLUGIN_EXPORT void agus_duckdb_set_rendering_enabled(int32_t enabled);
+
+// Executes a SQL migration file against the app-instance DuckDB connection.
+// Returns 1 on success, 0 on failure.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_apply_migration_file(const char* path);
+
+// Applies embedded app schema migrations and verifies recorded checksums.
+// Returns 1 on success, 0 on failure.
+FFI_PLUGIN_EXPORT int32_t agus_duckdb_run_migrations(void);
+
+// =============================================================================
 // Native Surface Functions (for Windows/Desktop)
 // =============================================================================
 
@@ -252,11 +543,20 @@ FFI_PLUGIN_EXPORT void agus_native_on_surface_destroyed(void);
 // Returns HANDLE that can be used to open the shared texture
 FFI_PLUGIN_EXPORT void* agus_get_shared_texture_handle(void);
 
+// Get the currently displayable DXGI shared texture handle and physical size.
+// The returned legacy shared handle is owned by the native D3D resource.
+FFI_PLUGIN_EXPORT int agus_get_shared_texture_descriptor_info(void** handle, int32_t* width, int32_t* height);
+
 // Get the D3D11 device pointer (Windows only)
 FFI_PLUGIN_EXPORT void* agus_get_d3d11_device(void);
 
 // Get the D3D11 texture pointer (Windows only)
 FFI_PLUGIN_EXPORT void* agus_get_d3d11_texture(void);
+
+// Get an AddRef'd D3D11 texture pointer and its current physical size
+// atomically with respect to native resize. The caller must Release() the
+// returned texture pointer.
+FFI_PLUGIN_EXPORT int agus_get_d3d11_texture_info(void** texture, int32_t* width, int32_t* height);
 
 // Render a single frame (triggers frame ready callback)
 FFI_PLUGIN_EXPORT void agus_render_frame(void);

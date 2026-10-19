@@ -1,6 +1,6 @@
 # Build Configuration Guide
 
-This document explains the available build configurations for the `agus_maps_flutter` plugin across all supported platforms. It details how Flutter build modes (Debug, Profile, Release) map to the underlying C++ library configurations and the specific macros used in **branch `release/v0.1.11`**.
+This document explains the available build configurations for the `agus_maps_flutter` plugin across all supported platforms. It details how Flutter build modes (Debug, Profile, Release) map to the underlying C++ library configurations used by the current source build and release packaging workflows.
 
 ## General Concepts
 
@@ -12,7 +12,7 @@ The plugin relies on a shared C++ core (`comaps`). This core has strict compilat
 
 ## Platform-Specific Configurations
 
-### 1. iOS (`ios/agus_maps_flutter.podspec`)
+### 1. iOS (`ios/agus_maps_flutter.podspec` / `ios/agus_maps_flutter/Package.swift`)
 
 | Flutter Mode | Xcode Configuration | Macros Injected | Description |
 | :--- | :--- | :--- | :--- |
@@ -20,13 +20,27 @@ The plugin relies on a shared C++ core (`comaps`). This core has strict compilat
 | `flutter run --release` | `Release` | `RELEASE=1`<br>`NDEBUG=1`<br>`PLATFORM_IPHONE=1` | **Production**: Fully optimized. defines `RELEASE` to satisfy `base.hpp`. |
 | `flutter run --profile` | `Profile` | `RELEASE=1`<br>`NDEBUG=1`<br>`PLATFORM_IPHONE=1` | **Performance Analysis**: Uses Release native code for accurate timing. |
 
-### 2. macOS (`macos/agus_maps_flutter.podspec`)
+The example iOS Runner target includes a dedicated
+`example/ios/Flutter/Profile.xcconfig` that imports
+`Pods-Runner.profile.xcconfig` before `Generated.xcconfig`. This keeps Xcode's
+Profile configuration aligned with CocoaPods and avoids stale generated file
+references from previous pod graphs.
+
+The repository-owned plugin also supports Swift Package Manager. The SwiftPM
+manifest uses the same platform macros and consumes the same generated
+`CoMaps.xcframework` and Metal shader resource layout.
+
+### 2. macOS (`macos/agus_maps_flutter.podspec` / `macos/agus_maps_flutter/Package.swift`)
 
 | Flutter Mode | Xcode Configuration | Macros Injected | Description |
 | :--- | :--- | :--- | :--- |
 | `flutter run -d macos --debug` | `Debug` | `DEBUG=1`<br>`PLATFORM_MAC=1`<br>`PLATFORM_DESKTOP=1` | **Development**: Includes macOS desktop-specific debug logic. |
 | `flutter run -d macos --release` | `Release` | `RELEASE=1`<br>`NDEBUG=1`<br>`PLATFORM_MAC=1`<br>`PLATFORM_DESKTOP=1` | **Production/App Store**: Optimized for distribution. |
 | `flutter run -d macos --profile` | `Profile` | `RELEASE=1`<br>`NDEBUG=1`<br>`PLATFORM_MAC=1`<br>`PLATFORM_DESKTOP=1` | **Performance Analysis**: Uses Release native code. |
+
+SwiftPM macOS builds link the plugin into the app image, so Dart FFI resolves
+Apple symbols through `DynamicLibrary.process()` instead of opening an
+`agus_maps_flutter.framework` from the app bundle.
 
 ### 3. Android (`android/build.gradle` + CMake)
 
@@ -59,6 +73,15 @@ Linux uses standard CMake with Makefiles or Ninja.
 | `flutter run -d linux --debug` | `Debug` | `DEBUG` |
 | `flutter run -d linux --release` | `Release` | `RELEASE` |
 | `flutter run -d linux --profile` | `Release` | `RELEASE` |
+
+### Desktop DuckDB Runtime Packaging
+
+Windows and Linux desktop packages must use private DuckDB runtime artifacts from the SDK/prebuilt directories, never a system installation:
+
+- Windows bundles `duckdb.dll` when it exists beside `agus_maps_flutter.dll` in `windows/prebuilt/x64/` or `AGUS_MAPS_HOME/windows/prebuilt/x64/`.
+- Linux bundles `libduckdb.so` when it exists beside `libagus_maps_flutter.so` in `linux/prebuilt/x64/` or `AGUS_MAPS_HOME/linux/prebuilt/x64/`.
+
+If these files are absent, CMake logs that no private DuckDB runtime was found and does not search system paths. Platform build validation for the DuckDB desktop runtime must run on native Windows/Linux hosts after producing those artifacts.
 
 
 
@@ -110,8 +133,8 @@ When you run a build command, the following flow ensures the C++ library doesn't
 ```mermaid
 flowchart TD
     A["Flutter Command"] --> B{"Platform?"}
-    B -- "iOS/macOS" --> C["CocoaPods"]
-    C -->|"Reads Podspec"| D{"Config?"}
+    B -- "iOS/macOS" --> C["CocoaPods or SwiftPM"]
+    C -->|"Reads podspec or Package.swift"| D{"Config?"}
     D -- Debug --> E["Inject DEBUG=1"]
     D -- "Release/Profile" --> F["Inject RELEASE=1, NDEBUG=1"]
     
@@ -131,13 +154,24 @@ This environment variable is **configuration-agnostic**. It tells the build scri
 -   It must be set to the path of the downloaded SDK (e.g., `agus-maps-sdk-vX.Y.Z`).
 -   If omitted, the build scripts will attempt to fallback to in-repo source or fail if binaries are missing.
 
+For contributor builds inside this repository, prefer leaving `AGUS_MAPS_HOME`
+unset and, when needed, force source mode explicitly:
+
+```bash
+env -u AGUS_MAPS_HOME AGUS_MAPS_BUILD_MODE=contributor \
+  dart run tool/build.dart --build-binaries --platform ios
+```
+
+This ensures the Apple XCFrameworks are rebuilt from the patched
+`thirdparty/comaps` checkout instead of reusing a stale SDK artifact.
+
 
 ## 8. Summary: Platform Behavior Matrix
 
 | Platform | Build System | Detection Mechanism | Configuration Source |
 | :--- | :--- | :--- | :--- |
-| **iOS** | Xcode (CocoaPods) | **Manual Injection** | `agus_maps_flutter.podspec` |
-| **macOS** | Xcode (CocoaPods) | **Manual Injection** | `agus_maps_flutter.podspec` |
+| **iOS** | Xcode (CocoaPods or SwiftPM) | **Manual Injection** | `agus_maps_flutter.podspec` / `Package.swift` |
+| **macOS** | Xcode (CocoaPods or SwiftPM) | **Manual Injection** | `agus_maps_flutter.podspec` / `Package.swift` |
 | **Android** | Gradle + CMake | **Automatic** | `src/CMakeLists.txt` |
 | **Windows**| MSVC + CMake | **Automatic** | `src/CMakeLists.txt` |
 | **Linux** | Make/Ninja + CMake | **Automatic** | `src/CMakeLists.txt` |

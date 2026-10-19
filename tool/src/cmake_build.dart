@@ -1,10 +1,13 @@
 // CMake build orchestration for all platforms
 
+import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as path;
-import 'process_runner.dart' show runProcess, runProcessStreaming, commandExists;
+import 'process_runner.dart'
+    show runProcess, runProcessStreaming, commandExists;
 import 'file_operations.dart' show ensureDir, copyPath, dirExists, fileExists;
-import 'platform_detector.dart' show getRepoRoot, getBuildDir, getComapsDir, getCpuCores, detectOS, OSType;
+import 'platform_detector.dart'
+    show getRepoRoot, getBuildDir, getComapsDir, getCpuCores, detectOS, OSType;
 import 'config.dart' show BuildConfig;
 import 'utils.dart' show compareVersions;
 
@@ -14,20 +17,22 @@ String? _cmakePath;
 /// Get CMake executable path (may be in PATH or from Android SDK)
 String _getCMakePath() {
   if (_cmakePath != null) return _cmakePath!;
-  
+
   // Check if cmake is in PATH
-  final result = Process.runSync(Platform.isWindows ? 'where' : 'which', ['cmake'], runInShell: true);
+  final result = Process.runSync(
+      Platform.isWindows ? 'where' : 'which', ['cmake'],
+      runInShell: true);
   if (result.exitCode == 0) {
     _cmakePath = 'cmake';
     return _cmakePath!;
   }
-  
+
   // On Windows, try to find cmake from Android SDK
   if (Platform.isWindows) {
     final androidHome = Platform.environment['ANDROID_HOME'] ??
         Platform.environment['ANDROID_SDK_ROOT'] ??
         path.join(Platform.environment['LOCALAPPDATA'] ?? '', 'Android', 'Sdk');
-    
+
     if (androidHome.isNotEmpty && dirExists(androidHome)) {
       final cmakeDir = path.join(androidHome, 'cmake');
       if (dirExists(cmakeDir)) {
@@ -40,9 +45,10 @@ String _getCMakePath() {
             .where((name) => RegExp(r'^\d+\.\d+').hasMatch(name))
             .toList()
           ..sort((a, b) => compareVersions(b, a)); // Sort descending
-        
+
         if (cmakeVersions.isNotEmpty) {
-          final cmakeExe = path.join(cmakeDir, cmakeVersions.first, 'bin', 'cmake.exe');
+          final cmakeExe =
+              path.join(cmakeDir, cmakeVersions.first, 'bin', 'cmake.exe');
           if (fileExists(cmakeExe)) {
             _cmakePath = cmakeExe;
             print('Using CMake from Android SDK: $_cmakePath');
@@ -52,8 +58,188 @@ String _getCMakePath() {
       }
     }
   }
-  
-  throw Exception('CMake not found. Install CMake and add to PATH, or install via Android Studio SDK Manager.');
+
+  throw Exception(
+      'CMake not found. Install CMake and add to PATH, or install via Android Studio SDK Manager.');
+}
+
+/// Prefer the newest installed Visual Studio generator so project builds and
+/// vcpkg-built private dependencies use the same MSVC STL/runtime revision.
+String getWindowsVisualStudioGenerator() {
+  if (!Platform.isWindows) {
+    return 'Visual Studio 17 2022';
+  }
+
+  final override = Platform.environment['AGUS_WINDOWS_CMAKE_GENERATOR'];
+  if (override != null && override.trim().isNotEmpty) {
+    return override.trim();
+  }
+
+  final installedGenerators = _findInstalledVisualStudioGenerators();
+  if (installedGenerators.isEmpty) {
+    throw Exception(
+      'No supported Visual Studio installation with C++ tools was found. '
+      'Install Visual Studio 2019/2022/2026 with the Desktop development '
+      'with C++ workload, or set AGUS_WINDOWS_CMAKE_GENERATOR explicitly.',
+    );
+  }
+
+  final supportedGenerators = _getCMakeVisualStudioGenerators();
+  for (final generator in installedGenerators) {
+    if (supportedGenerators.contains(generator)) return generator;
+  }
+
+  if (supportedGenerators.isEmpty) {
+    throw Exception(
+      'The selected CMake does not support any Visual Studio generator.',
+    );
+  }
+
+  throw Exception(
+    'Installed Visual Studio generators (${installedGenerators.join(', ')}) '
+    'are not supported by the selected CMake. Supported Visual Studio '
+    'generators: ${supportedGenerators.join(', ')}',
+  );
+}
+
+List<String> _findInstalledVisualStudioGenerators() {
+  final generators = <String>{
+    ..._findVisualStudioGeneratorsWithVsWhere(),
+    ..._findVisualStudioGeneratorsInDefaultLocations(),
+  };
+
+  return _sortVisualStudioGenerators(generators);
+}
+
+List<String> _findVisualStudioGeneratorsWithVsWhere() {
+  final programFilesX86 =
+      Platform.environment['ProgramFiles(x86)'] ?? r'C:\Program Files (x86)';
+  final programFiles =
+      Platform.environment['ProgramFiles'] ?? r'C:\Program Files';
+  final candidates = <String>[
+    path.join(
+      programFilesX86,
+      'Microsoft Visual Studio',
+      'Installer',
+      'vswhere.exe',
+    ),
+    path.join(
+      programFiles,
+      'Microsoft Visual Studio',
+      'Installer',
+      'vswhere.exe',
+    ),
+    'vswhere',
+  ];
+
+  final generators = <String>{};
+  for (final candidate in candidates) {
+    final isPath = candidate.toLowerCase().endsWith('.exe');
+    if (isPath && !fileExists(candidate)) continue;
+
+    final result = _runVsWhere(candidate);
+    if (result == null || result.exitCode != 0) continue;
+
+    for (final line in result.stdout.toString().split(RegExp(r'\r?\n'))) {
+      final generator = _visualStudioGeneratorForVersion(line.trim());
+      if (generator != null) generators.add(generator);
+    }
+  }
+
+  return _sortVisualStudioGenerators(generators);
+}
+
+ProcessResult? _runVsWhere(String executable) {
+  try {
+    return Process.runSync(
+      executable,
+      [
+        '-products',
+        '*',
+        '-requires',
+        'Microsoft.VisualStudio.Component.VC.Tools.x86.x64',
+        '-property',
+        'installationVersion',
+      ],
+      runInShell: executable == 'vswhere',
+    );
+  } on ProcessException {
+    return null;
+  }
+}
+
+List<String> _findVisualStudioGeneratorsInDefaultLocations() {
+  final programFilesX86 =
+      Platform.environment['ProgramFiles(x86)'] ?? r'C:\Program Files (x86)';
+  final programFiles =
+      Platform.environment['ProgramFiles'] ?? r'C:\Program Files';
+  final editions = [
+    'Enterprise',
+    'Professional',
+    'Community',
+    'BuildTools',
+    'Preview',
+  ];
+  final versions = [
+    (year: '2026', generator: 'Visual Studio 18 2026'),
+    (year: '2022', generator: 'Visual Studio 17 2022'),
+    (year: '2019', generator: 'Visual Studio 16 2019'),
+  ];
+
+  final generators = <String>{};
+  for (final version in versions) {
+    final basePath = version.year == '2019' ? programFilesX86 : programFiles;
+    for (final edition in editions) {
+      final vcvars64 = path.join(
+        basePath,
+        'Microsoft Visual Studio',
+        version.year,
+        edition,
+        'VC',
+        'Auxiliary',
+        'Build',
+        'vcvars64.bat',
+      );
+      if (fileExists(vcvars64)) generators.add(version.generator);
+    }
+  }
+
+  return _sortVisualStudioGenerators(generators);
+}
+
+List<String> _sortVisualStudioGenerators(Iterable<String> generators) {
+  const preferredOrder = [
+    'Visual Studio 18 2026',
+    'Visual Studio 17 2022',
+    'Visual Studio 16 2019',
+  ];
+  final uniqueGenerators = generators.toSet();
+  return [
+    for (final generator in preferredOrder)
+      if (uniqueGenerators.contains(generator)) generator,
+  ];
+}
+
+String? _visualStudioGeneratorForVersion(String version) {
+  if (version.startsWith('18.')) return 'Visual Studio 18 2026';
+  if (version.startsWith('17.')) return 'Visual Studio 17 2022';
+  if (version.startsWith('16.')) return 'Visual Studio 16 2019';
+  return null;
+}
+
+Set<String> _getCMakeVisualStudioGenerators() {
+  final cmake = _getCMakePath();
+  final result = Process.runSync(cmake, ['--help'], runInShell: true);
+  if (result.exitCode != 0) {
+    throw Exception('Failed to query CMake generators: ${result.stderr}');
+  }
+
+  final help = result.stdout.toString();
+  return {
+    if (help.contains('Visual Studio 18 2026')) 'Visual Studio 18 2026',
+    if (help.contains('Visual Studio 17 2022')) 'Visual Studio 17 2022',
+    if (help.contains('Visual Studio 16 2019')) 'Visual Studio 16 2019',
+  };
 }
 
 /// Build configuration for CMake
@@ -61,7 +247,9 @@ class CMakeBuildConfig {
   final String sourceDir;
   final String buildDir;
   final Map<String, String> variables;
+  final Map<String, String>? environment;
   final String? generator;
+  final String? platform;
   final String? target;
   final int? parallelJobs;
 
@@ -69,7 +257,9 @@ class CMakeBuildConfig {
     required this.sourceDir,
     required this.buildDir,
     required this.variables,
+    this.environment,
     this.generator,
+    this.platform,
     this.target,
     this.parallelJobs,
   });
@@ -77,17 +267,23 @@ class CMakeBuildConfig {
 
 /// Configure and build with CMake
 Future<void> buildWithCMake(CMakeBuildConfig config) async {
+  await _prepareCMakeBuildDirectory(config);
   await ensureDir(config.buildDir);
 
   // CMake configure arguments
   final cmakeArgs = <String>[
-    '-S', config.sourceDir,
-    '-B', config.buildDir,
+    '-S',
+    config.sourceDir,
+    '-B',
+    config.buildDir,
   ];
 
   // Add generator if specified
   if (config.generator != null) {
     cmakeArgs.addAll(['-G', config.generator!]);
+  }
+  if (config.platform != null) {
+    cmakeArgs.addAll(['-A', config.platform!]);
   }
 
   // Add CMake variables
@@ -96,21 +292,31 @@ Future<void> buildWithCMake(CMakeBuildConfig config) async {
   }
 
   final cmake = _getCMakePath();
-  
+
   print('Configuring CMake...');
   print('  Source: ${config.sourceDir}');
   print('  Build: ${config.buildDir}');
   if (config.generator != null) {
     print('  Generator: ${config.generator}');
   }
+  if (config.platform != null) {
+    print('  Platform: ${config.platform}');
+  }
 
   // Configure
-  await runProcessStreaming(
+  final configureExitCode = await runProcessStreaming(
     cmake,
     cmakeArgs,
-    onStdout: (line) => stdout.write(line),
-    onStderr: (line) => stderr.write(line),
+    environment: config.environment,
   );
+  if (configureExitCode != 0) {
+    throw ProcessException(
+      cmake,
+      cmakeArgs,
+      'CMake configure failed with exit code $configureExitCode',
+      configureExitCode,
+    );
+  }
 
   // Build
   print('Building with CMake...');
@@ -121,14 +327,15 @@ Future<void> buildWithCMake(CMakeBuildConfig config) async {
 
   // Visual Studio generator uses multi-config builds, so --config is required
   // For single-config generators (Ninja, Unix Makefiles), CMAKE_BUILD_TYPE is used instead
-  final isMultiConfig = config.generator != null && 
-      (config.generator!.contains('Visual Studio') || 
-       config.generator!.contains('Xcode'));
-  
+  final isMultiConfig = config.generator != null &&
+      (config.generator!.contains('Visual Studio') ||
+          config.generator!.contains('Xcode'));
+
   if (isMultiConfig) {
     // For multi-config generators, use --config flag
     // Extract build type from variables if CMAKE_BUILD_TYPE is set
-    final buildType = config.variables['CMAKE_BUILD_TYPE'] ?? BuildConfig.buildType;
+    final buildType =
+        config.variables['CMAKE_BUILD_TYPE'] ?? BuildConfig.buildType;
     buildArgs.addAll(['--config', buildType]);
   }
 
@@ -139,27 +346,152 @@ Future<void> buildWithCMake(CMakeBuildConfig config) async {
   final jobs = config.parallelJobs ?? getCpuCores();
   buildArgs.addAll(['--parallel', jobs.toString()]);
 
-  await runProcessStreaming(
+  final buildExitCode = await runProcessStreaming(
     cmake,
     buildArgs,
-    onStdout: (line) => stdout.write(line),
-    onStderr: (line) => stderr.write(line),
+    environment: config.environment,
   );
+  if (buildExitCode != 0) {
+    throw ProcessException(
+      cmake,
+      buildArgs,
+      'CMake build failed with exit code $buildExitCode',
+      buildExitCode,
+    );
+  }
 
   print('CMake build complete!');
 }
 
+Future<void> _prepareCMakeBuildDirectory(CMakeBuildConfig config) async {
+  final cacheFile = File(path.join(config.buildDir, 'CMakeCache.txt'));
+  if (!await cacheFile.exists()) return;
+
+  final expectedMetalCompiler = config.variables['CMAKE_Metal_COMPILER'];
+  final cacheValues = await _readCMakeCacheValues(cacheFile, const {
+    'CMAKE_HOME_DIRECTORY',
+    'CMAKE_CACHEFILE_DIR',
+    'CMAKE_Metal_COMPILER',
+  });
+
+  final cachedSource = cacheValues['CMAKE_HOME_DIRECTORY'];
+  final cachedBuild = cacheValues['CMAKE_CACHEFILE_DIR'];
+  final cachedMetalCompiler = cacheValues['CMAKE_Metal_COMPILER'];
+  final expectedSource = _normalizeCMakeCachePath(config.sourceDir);
+  final expectedBuild = _normalizeCMakeCachePath(config.buildDir);
+
+  final sourceMatches = cachedSource == null ||
+      _normalizeCMakeCachePath(cachedSource) == expectedSource;
+  final buildMatches = cachedBuild == null ||
+      _normalizeCMakeCachePath(cachedBuild) == expectedBuild;
+  final metalCompilerMatches = expectedMetalCompiler == null ||
+      cachedMetalCompiler == null ||
+      _normalizeCMakeCachePath(cachedMetalCompiler) ==
+          _normalizeCMakeCachePath(expectedMetalCompiler);
+  final cachedMetalCompilerExists =
+      cachedMetalCompiler == null || fileExists(cachedMetalCompiler);
+
+  if (sourceMatches &&
+      buildMatches &&
+      metalCompilerMatches &&
+      cachedMetalCompilerExists) {
+    return;
+  }
+
+  print('Discarding stale CMake build directory: ${config.buildDir}');
+  if (cachedSource != null && !sourceMatches) {
+    print('  Cached source: $cachedSource');
+    print('  Current source: ${config.sourceDir}');
+  }
+  if (cachedBuild != null && !buildMatches) {
+    print('  Cached build: $cachedBuild');
+    print('  Current build: ${config.buildDir}');
+  }
+  if (cachedMetalCompiler != null && !metalCompilerMatches) {
+    print('  Cached Metal compiler: $cachedMetalCompiler');
+    print('  Current Metal compiler: $expectedMetalCompiler');
+  }
+  if (cachedMetalCompiler != null && !cachedMetalCompilerExists) {
+    print('  Cached Metal compiler no longer exists: $cachedMetalCompiler');
+  }
+  await _deleteIfExists(config.buildDir);
+}
+
+Future<Map<String, String>> _readCMakeCacheValues(
+  File cacheFile,
+  Set<String> keys,
+) async {
+  final values = <String, String>{};
+  await for (final line in cacheFile
+      .openRead()
+      .transform(systemEncoding.decoder)
+      .transform(const LineSplitter())) {
+    final separator = line.indexOf('=');
+    if (separator <= 0) continue;
+    final nameAndType = line.substring(0, separator);
+    final typeSeparator = nameAndType.indexOf(':');
+    final name = typeSeparator >= 0
+        ? nameAndType.substring(0, typeSeparator)
+        : nameAndType;
+    if (keys.contains(name)) {
+      values[name] = line.substring(separator + 1);
+    }
+  }
+  return values;
+}
+
+String _normalizeCMakeCachePath(String value) {
+  final normalized = path.normalize(
+    path.isAbsolute(value) ? value : path.absolute(value),
+  );
+  return Platform.isWindows ? normalized.toLowerCase() : normalized;
+}
+
+Future<String> _resolveMacOSMetalCompiler() async {
+  final result = await Process.run(
+    'xcrun',
+    ['--find', 'metal'],
+  );
+  if (result.exitCode != 0) {
+    throw Exception(
+      'Failed to locate the Metal compiler with xcrun --find metal: '
+      '${result.stderr}',
+    );
+  }
+
+  final compilerPath = result.stdout.toString().trim();
+  if (compilerPath.isEmpty || !fileExists(compilerPath)) {
+    throw Exception(
+      'xcrun returned a Metal compiler path that does not exist: '
+      '$compilerPath',
+    );
+  }
+
+  final versionResult = await Process.run(compilerPath, ['--version']);
+  if (versionResult.exitCode != 0) {
+    throw Exception(
+      'The Metal compiler is not executable: $compilerPath\n'
+      '${versionResult.stderr}',
+    );
+  }
+
+  return compilerPath;
+}
+
 /// Build Android native library for a specific ABI
-Future<void> buildAndroidAbi(String abi, {
+Future<void> buildAndroidAbi(
+  String abi, {
   String? ndkPath,
   String? sourceDir,
+  String? duckdbAndroidDir,
 }) async {
   final buildDir = path.join(getBuildDir(), 'android-$abi');
   final source = sourceDir ?? path.join(getRepoRoot(), 'src');
-  final ndk = ndkPath ?? _detectAndroidNDK();
+  final ndk = ndkPath ?? detectAndroidNDK();
 
   // Find NDK toolchain
-  final toolchainFile = path.join(ndk, 'build', 'cmake', 'android.toolchain.cmake');
+  final toolchainFile =
+      path.join(ndk, 'build', 'cmake', 'android.toolchain.cmake');
   if (!fileExists(toolchainFile)) {
     throw Exception('Android NDK toolchain not found: $toolchainFile');
   }
@@ -172,6 +504,9 @@ Future<void> buildAndroidAbi(String abi, {
     'CMAKE_BUILD_TYPE': BuildConfig.buildType,
     'ANDROID': 'ON',
   };
+  if (duckdbAndroidDir != null) {
+    variables['AGUS_DUCKDB_ANDROID_DIR'] = duckdbAndroidDir;
+  }
 
   await buildWithCMake(CMakeBuildConfig(
     sourceDir: source,
@@ -202,8 +537,10 @@ Future<void> buildiOSXCFramework({
   final outputDir = path.join(getBuildDir(), 'agus-binaries-ios');
 
   // Get SDK paths
-  final deviceSdkResult = await Process.run('xcrun', ['--sdk', 'iphoneos', '--show-sdk-path']);
-  final simSdkResult = await Process.run('xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path']);
+  final deviceSdkResult =
+      await Process.run('xcrun', ['--sdk', 'iphoneos', '--show-sdk-path']);
+  final simSdkResult = await Process.run(
+      'xcrun', ['--sdk', 'iphonesimulator', '--show-sdk-path']);
 
   if (deviceSdkResult.exitCode != 0 || simSdkResult.exitCode != 0) {
     throw Exception('Failed to get iOS SDK paths');
@@ -265,7 +602,8 @@ Future<void> buildiOSXCFramework({
 }
 
 /// Create iOS XCFramework from device and simulator builds
-Future<void> _createiOSXCFramework(String deviceBuildDir, String simBuildDir, String outputDir) async {
+Future<void> _createiOSXCFramework(
+    String deviceBuildDir, String simBuildDir, String outputDir) async {
   // Create temporary directories for merged libraries (separate to avoid overwriting)
   final tempDir = path.join(outputDir, 'temp');
   final deviceTempDir = path.join(tempDir, 'iphoneos');
@@ -286,11 +624,15 @@ Future<void> _createiOSXCFramework(String deviceBuildDir, String simBuildDir, St
   // Create XCFramework with the same library name (CocoaPods requirement)
   // Both libraries must have the same name 'libcomaps.a' but in different directories
   final xcframeworkPath = path.join(outputDir, 'CoMaps.xcframework');
+  await _deleteIfExists(xcframeworkPath);
   await runProcess('xcodebuild', [
     '-create-xcframework',
-    '-library', deviceMerged,
-    '-library', simMerged,
-    '-output', xcframeworkPath,
+    '-library',
+    deviceMerged,
+    '-library',
+    simMerged,
+    '-output',
+    xcframeworkPath,
   ]);
 
   // Clean up temp directory
@@ -311,11 +653,14 @@ Future<void> buildMacOSXCFramework({
   final outputDir = path.join(getBuildDir(), 'agus-binaries-macos');
 
   // Get macOS SDK path
-  final sdkResult = await Process.run('xcrun', ['--sdk', 'macosx', '--show-sdk-path']);
+  final sdkResult =
+      await Process.run('xcrun', ['--sdk', 'macosx', '--show-sdk-path']);
   if (sdkResult.exitCode != 0) {
     throw Exception('Failed to get macOS SDK path');
   }
   final sdkPath = sdkResult.stdout.toString().trim();
+  final metalCompiler = await _resolveMacOSMetalCompiler();
+  print('Using Metal compiler: $metalCompiler');
 
   // Build for arm64
   final arm64BuildDir = path.join(buildDir, 'arm64');
@@ -329,6 +674,7 @@ Future<void> buildMacOSXCFramework({
       'CMAKE_OSX_ARCHITECTURES': 'arm64',
       'CMAKE_OSX_SYSROOT': sdkPath,
       'CMAKE_OSX_DEPLOYMENT_TARGET': BuildConfig.macOSDeploymentTarget,
+      'CMAKE_Metal_COMPILER': metalCompiler,
       'PLATFORM_IPHONE': 'OFF',
       'PLATFORM_DESKTOP': 'ON',
       'SKIP_TESTS': 'ON',
@@ -354,6 +700,7 @@ Future<void> buildMacOSXCFramework({
       'CMAKE_OSX_ARCHITECTURES': 'x86_64',
       'CMAKE_OSX_SYSROOT': sdkPath,
       'CMAKE_OSX_DEPLOYMENT_TARGET': BuildConfig.macOSDeploymentTarget,
+      'CMAKE_Metal_COMPILER': metalCompiler,
       'PLATFORM_IPHONE': 'OFF',
       'PLATFORM_DESKTOP': 'ON',
       'SKIP_TESTS': 'ON',
@@ -372,7 +719,8 @@ Future<void> buildMacOSXCFramework({
 }
 
 /// Create macOS XCFramework from arm64 and x86_64 builds
-Future<void> _createMacOSXCFramework(String arm64BuildDir, String x64BuildDir, String outputDir) async {
+Future<void> _createMacOSXCFramework(
+    String arm64BuildDir, String x64BuildDir, String outputDir) async {
   await ensureDir(outputDir);
 
   // Merge static libraries for arm64
@@ -387,6 +735,7 @@ Future<void> _createMacOSXCFramework(String arm64BuildDir, String x64BuildDir, S
 
   // Create universal binary
   final universalLib = path.join(outputDir, 'libcomaps.a');
+  await _deleteIfExists(universalLib);
   await runProcess('lipo', [
     '-create',
     arm64Merged,
@@ -397,10 +746,13 @@ Future<void> _createMacOSXCFramework(String arm64BuildDir, String x64BuildDir, S
 
   // Create XCFramework
   final xcframeworkPath = path.join(outputDir, 'CoMaps.xcframework');
+  await _deleteIfExists(xcframeworkPath);
   await runProcess('xcodebuild', [
     '-create-xcframework',
-    '-library', universalLib,
-    '-output', xcframeworkPath,
+    '-library',
+    universalLib,
+    '-output',
+    xcframeworkPath,
   ]);
 
   print('Created XCFramework: $xcframeworkPath');
@@ -410,13 +762,15 @@ Future<void> _createMacOSXCFramework(String arm64BuildDir, String x64BuildDir, S
 Future<void> buildWindowsLibrary({
   String? sourceDir,
   String? vcpkgRoot,
+  String? duckdbWindowsDir,
 }) async {
   final source = sourceDir ?? path.join(getRepoRoot(), 'src');
   final buildDir = path.join(getBuildDir(), 'windows-x64');
   final outputDir = path.join(getBuildDir(), 'agus-binaries-windows', 'x64');
   final vcpkg = vcpkgRoot ?? _detectVcpkg();
 
-  final toolchainFile = path.join(vcpkg, 'scripts', 'buildsystems', 'vcpkg.cmake');
+  final toolchainFile =
+      path.join(vcpkg, 'scripts', 'buildsystems', 'vcpkg.cmake');
   if (!fileExists(toolchainFile)) {
     throw Exception('vcpkg toolchain not found: $toolchainFile');
   }
@@ -425,8 +779,8 @@ Future<void> buildWindowsLibrary({
   // (ICU has known issues with newer GCC versions like 15.2.0)
   String? generator;
   if (Platform.isWindows) {
-    // Use Visual Studio generator on Windows to avoid GCC/MinGW issues
-    generator = 'Visual Studio 17 2022';
+    // Use Visual Studio generator on Windows to avoid GCC/MinGW issues.
+    generator = getWindowsVisualStudioGenerator();
   } else {
     // On other platforms, use Ninja if available
     if (await commandExists('ninja')) {
@@ -450,12 +804,17 @@ Future<void> buildWindowsLibrary({
     'CMAKE_C_COMPILER_LAUNCHER': '',
     'CMAKE_CXX_COMPILER_LAUNCHER': '',
   };
+  if (duckdbWindowsDir != null) {
+    variables['AGUS_DUCKDB_WINDOWS_DIR'] = duckdbWindowsDir;
+  }
 
+  await _deleteIfExists(buildDir);
   await buildWithCMake(CMakeBuildConfig(
     sourceDir: source,
     buildDir: buildDir,
     variables: variables,
     generator: generator,
+    platform: Platform.isWindows ? 'x64' : null,
   ));
 
   // Copy output DLL
@@ -465,7 +824,8 @@ Future<void> buildWindowsLibrary({
   // Ninja generator uses single-config, so DLL is in buildDir/ (CMAKE_BUILD_TYPE sets the location)
   final buildType = BuildConfig.buildType; // Release or Debug
   final dllPaths = [
-    path.join(buildDir, buildType, dllName), // Visual Studio: buildDir/Release/ or buildDir/Debug/
+    path.join(buildDir, buildType,
+        dllName), // Visual Studio: buildDir/Release/ or buildDir/Debug/
     path.join(buildDir, dllName), // Ninja/single-config: buildDir/
   ];
 
@@ -483,14 +843,33 @@ Future<void> buildWindowsLibrary({
     throw Exception('Build output not found: $dllName');
   }
 
-  // Copy zlib1.dll runtime dependency from vcpkg
+  if (duckdbWindowsDir != null) {
+    for (final name in ['duckdb.dll', 'duckdb.lib']) {
+      final sourcePath = path.join(duckdbWindowsDir, name);
+      if (!fileExists(sourcePath)) {
+        throw Exception('DuckDB Windows artifact not found: $sourcePath');
+      }
+      await copyPath(sourcePath, path.join(outputDir, name));
+    }
+    print('Copied DuckDB runtime to $outputDir');
+  }
+
+  // Copy zlib1.dll runtime dependency from available Windows dependency roots.
   // This DLL is required at runtime by agus_maps_flutter.dll
-  final zlibDllPaths = [
+  final zlibDllPaths = <String>[
     // Manifest mode: vcpkg_installed/x64-windows/bin/zlib1.dll
     path.join(vcpkgInstalledDir, 'x64-windows', 'bin', 'zlib1.dll'),
     // Classic mode: vcpkg/installed/x64-windows/bin/zlib1.dll
     path.join(vcpkg, 'installed', 'x64-windows', 'bin', 'zlib1.dll'),
   ];
+  final msys2Root = Platform.environment['MSYS2_ROOT'];
+  if (msys2Root != null && msys2Root.isNotEmpty) {
+    zlibDllPaths.add(path.join(msys2Root, 'mingw64', 'bin', 'zlib1.dll'));
+  }
+  zlibDllPaths.addAll([
+    r'C:\msys64\mingw64\bin\zlib1.dll',
+    r'C:\tools\msys64\mingw64\bin\zlib1.dll',
+  ]);
 
   var zlibCopied = false;
   for (final zlibPath in zlibDllPaths) {
@@ -569,6 +948,8 @@ Future<void> _mergeStaticLibraries(List<String> libs, String output) async {
     throw Exception('No static libraries found to merge');
   }
 
+  await _deleteIfExists(output);
+
   final os = detectOS();
   if (os == OSType.macos || os == OSType.linux) {
     // Use libtool on macOS/iOS, ar on Linux
@@ -583,28 +964,52 @@ Future<void> _mergeStaticLibraries(List<String> libs, String output) async {
   }
 }
 
+Future<void> _deleteIfExists(String targetPath) async {
+  final type = await FileSystemEntity.type(targetPath);
+  switch (type) {
+    case FileSystemEntityType.file:
+    case FileSystemEntityType.link:
+      await File(targetPath).delete();
+      break;
+    case FileSystemEntityType.directory:
+      await Directory(targetPath).delete(recursive: true);
+      break;
+    case FileSystemEntityType.notFound:
+      break;
+    default:
+      throw Exception('Unsupported filesystem entity at $targetPath');
+  }
+}
+
 /// Detect Android NDK path
-String _detectAndroidNDK() {
+String detectAndroidNDK() {
   // Check environment variable first
-  final envNdkPath = Platform.environment['ANDROID_NDK_HOME'] ?? 
+  final envNdkPath = Platform.environment['ANDROID_NDK_HOME'] ??
       Platform.environment['ANDROID_NDK'];
   if (envNdkPath != null && envNdkPath.isNotEmpty && dirExists(envNdkPath)) {
     print('Using NDK from environment: $envNdkPath');
     return envNdkPath;
   }
-  
+
   final androidHome = Platform.environment['ANDROID_HOME'] ??
       Platform.environment['ANDROID_SDK_ROOT'] ??
-      (Platform.isMacOS ? path.join(Platform.environment['HOME']!, 'Library', 'Android', 'sdk') : 
-       Platform.isLinux ? path.join(Platform.environment['HOME']!, 'Android', 'Sdk') :
-       Platform.isWindows ? path.join(Platform.environment['LOCALAPPDATA'] ?? '', 'Android', 'Sdk') : '');
-  
+      (Platform.isMacOS
+          ? path.join(
+              Platform.environment['HOME']!, 'Library', 'Android', 'sdk')
+          : Platform.isLinux
+              ? path.join(Platform.environment['HOME']!, 'Android', 'Sdk')
+              : Platform.isWindows
+                  ? path.join(Platform.environment['LOCALAPPDATA'] ?? '',
+                      'Android', 'Sdk')
+                  : '');
+
   if (androidHome.isEmpty || !dirExists(androidHome)) {
-    throw Exception('ANDROID_HOME not set or not found. Set ANDROID_HOME or ANDROID_SDK_ROOT environment variable.');
+    throw Exception(
+        'ANDROID_HOME not set or not found. Set ANDROID_HOME or ANDROID_SDK_ROOT environment variable.');
   }
 
   final ndkDir = path.join(androidHome, 'ndk');
-  
+
   // First try the configured version
   final preferredNdk = path.join(ndkDir, BuildConfig.ndkVersion);
   if (dirExists(preferredNdk)) {
@@ -614,7 +1019,8 @@ String _detectAndroidNDK() {
   // Auto-detect installed NDK versions
   final ndkDirectory = Directory(ndkDir);
   if (!ndkDirectory.existsSync()) {
-    throw Exception('Android NDK directory not found: $ndkDir\nInstall NDK via Android Studio SDK Manager.');
+    throw Exception(
+        'Android NDK directory not found: $ndkDir\nInstall NDK via Android Studio SDK Manager.');
   }
 
   final installedNdks = ndkDirectory
@@ -634,20 +1040,23 @@ String _detectAndroidNDK() {
   // Use the newest available NDK
   final selectedNdk = installedNdks.first;
   final selectedPath = path.join(ndkDir, selectedNdk);
-  
+
   if (selectedNdk != BuildConfig.ndkVersion) {
-    print('Note: Using NDK $selectedNdk (configured: ${BuildConfig.ndkVersion})');
+    print(
+        'Note: Using NDK $selectedNdk (configured: ${BuildConfig.ndkVersion})');
   }
-  
+
   return selectedPath;
 }
 
 /// Detect vcpkg path
 String _detectVcpkg() {
-  final vcpkgRoot = Platform.environment['VCPKG_ROOT'] ?? 
+  final vcpkgRoot = Platform.environment['VCPKG_ROOT'] ??
       (Platform.isWindows ? 'C:\\vcpkg' : '/usr/local/vcpkg');
-  if (!dirExists(vcpkgRoot)) {
-    throw Exception('vcpkg not found at: $vcpkgRoot');
+  final toolchainFile =
+      path.join(vcpkgRoot, 'scripts', 'buildsystems', 'vcpkg.cmake');
+  if (!dirExists(vcpkgRoot) || !fileExists(toolchainFile)) {
+    throw Exception('vcpkg toolchain not found: $toolchainFile');
   }
   return vcpkgRoot;
 }

@@ -29,6 +29,9 @@ endif()
 set(PROJECT_NAME "agus_maps_flutter")
 project(${PROJECT_NAME} LANGUAGES CXX)
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/AgusMsvcParallel.cmake")
+agus_enable_msvc_parallel_builds()
+
 # This value is used when generating builds using this plugin, so it must
 # not be changed
 set(PLUGIN_NAME "agus_maps_flutter_plugin")
@@ -52,6 +55,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(PREBUILT_DIR "")
 set(PREBUILT_DLL "")
 set(PREBUILT_ZLIB "")
+set(PREBUILT_DUCKDB "")
 
 # Detect if we're in the plugin repository (in-repo build)
 set(IS_IN_REPO OFF)
@@ -67,8 +71,21 @@ if(DEFINED ENV{CI})
   message(STATUS "Detected CI environment")
 endif()
 
+# In-repo development should build native code from source by default. A local
+# prebuilt DLL can otherwise hide source fixes while testing the example app.
+set(FORCE_PREBUILT_WINDOWS OFF)
+if(DEFINED ENV{AGUS_MAPS_USE_PREBUILT_WINDOWS})
+  string(TOLOWER "$ENV{AGUS_MAPS_USE_PREBUILT_WINDOWS}" AGUS_MAPS_USE_PREBUILT_WINDOWS_VALUE)
+  if(AGUS_MAPS_USE_PREBUILT_WINDOWS_VALUE STREQUAL "1" OR
+     AGUS_MAPS_USE_PREBUILT_WINDOWS_VALUE STREQUAL "true" OR
+     AGUS_MAPS_USE_PREBUILT_WINDOWS_VALUE STREQUAL "yes")
+    set(FORCE_PREBUILT_WINDOWS ON)
+    message(STATUS "AGUS_MAPS_USE_PREBUILT_WINDOWS enabled; prebuilt Windows DLLs may be used")
+  endif()
+endif()
+
 # Location 1a: AGUS_MAPS_HOME (Environment Variable)
-if(DEFINED ENV{AGUS_MAPS_HOME} AND NOT PREBUILT_DIR)
+if(DEFINED ENV{AGUS_MAPS_HOME} AND NOT PREBUILT_DIR AND (NOT IS_IN_REPO OR FORCE_PREBUILT_WINDOWS))
   set(AGUS_SDK_HOME "$ENV{AGUS_MAPS_HOME}")
   # Normalize path (remove quotes etc if present)
   file(TO_CMAKE_PATH "${AGUS_SDK_HOME}" AGUS_SDK_HOME)
@@ -78,25 +95,44 @@ if(DEFINED ENV{AGUS_MAPS_HOME} AND NOT PREBUILT_DIR)
     set(PREBUILT_DIR "${SDK_WINDOWS_PREBUILT_DIR}")
     set(PREBUILT_DLL "${PREBUILT_DIR}/agus_maps_flutter.dll")
     set(PREBUILT_ZLIB "${PREBUILT_DIR}/zlib1.dll")
+    set(PREBUILT_DUCKDB "${PREBUILT_DIR}/duckdb.dll")
     message(STATUS "Found pre-built Windows binaries in AGUS_MAPS_HOME: ${PREBUILT_DIR}")
   else()
     message(STATUS "WARNING: AGUS_MAPS_HOME set but binaries not found in ${SDK_WINDOWS_PREBUILT_DIR}")
   endif()
+elseif(DEFINED ENV{AGUS_MAPS_HOME} AND IS_IN_REPO AND NOT FORCE_PREBUILT_WINDOWS)
+  message(STATUS "Ignoring AGUS_MAPS_HOME for in-repo Windows source build; set AGUS_MAPS_USE_PREBUILT_WINDOWS=1 to force prebuilts")
 endif()
 
 # Location 1b: Plugin-local prebuilt (CI builds, or plugin vendored with binaries)
-if(NOT PREBUILT_DIR AND (IS_CI OR EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/x64/agus_maps_flutter.dll"))
+if(NOT PREBUILT_DIR AND (FORCE_PREBUILT_WINDOWS OR IS_CI OR NOT IS_IN_REPO) AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/x64/agus_maps_flutter.dll")
   set(PLUGIN_PREBUILT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/x64")
   if(EXISTS "${PLUGIN_PREBUILT_DIR}/agus_maps_flutter.dll")
     set(PREBUILT_DIR "${PLUGIN_PREBUILT_DIR}")
     set(PREBUILT_DLL "${PREBUILT_DIR}/agus_maps_flutter.dll")
     set(PREBUILT_ZLIB "${PREBUILT_DIR}/zlib1.dll")
+    set(PREBUILT_DUCKDB "${PREBUILT_DIR}/duckdb.dll")
     if(IS_CI)
       message(STATUS "CI environment: Found pre-built binaries in plugin dir: ${PREBUILT_DIR}")
     else()
       message(STATUS "Found pre-built binaries in plugin dir: ${PREBUILT_DIR}")
     endif()
   endif()
+endif()
+
+# DuckDB desktop runtime is private to the SDK/package. Do not search PATH,
+# Program Files, or vcpkg for duckdb.dll at app packaging time.
+set(AGUS_DUCKDB_WINDOWS_RUNTIME "")
+if(PREBUILT_DUCKDB AND EXISTS "${PREBUILT_DUCKDB}")
+  set(AGUS_DUCKDB_WINDOWS_RUNTIME "${PREBUILT_DUCKDB}")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/x64/duckdb.dll")
+  set(AGUS_DUCKDB_WINDOWS_RUNTIME "${CMAKE_CURRENT_SOURCE_DIR}/prebuilt/x64/duckdb.dll")
+endif()
+
+if(AGUS_DUCKDB_WINDOWS_RUNTIME)
+  message(STATUS "Bundling private DuckDB runtime: ${AGUS_DUCKDB_WINDOWS_RUNTIME}")
+else()
+  message(STATUS "Private DuckDB Windows runtime not found; no system DuckDB fallback will be used")
 endif()
 
 # Location 2: Project root windows/prebuilt (consumer extracts unified package to app root)
@@ -178,41 +214,63 @@ endif()
 # ============================================================================
 # Find Runtime Dependencies
 # ============================================================================
+set(ZLIB_DLLS "")
+
 if(USE_PREBUILT_WINDOWS)
   # Use pre-built zlib DLL
   if(EXISTS "${PREBUILT_ZLIB}")
-    set(ZLIB_DLL "${PREBUILT_ZLIB}")
-    message(STATUS "Using pre-built zlib: ${ZLIB_DLL}")
+    list(APPEND ZLIB_DLLS "${PREBUILT_ZLIB}")
+    message(STATUS "Using pre-built zlib: ${PREBUILT_ZLIB}")
   else()
     message(WARNING "Pre-built zlib1.dll not found at ${PREBUILT_ZLIB}")
   endif()
 else()
   # CoMaps uses zlib via find_package(ZLIB), which on Windows with vcpkg
-  # results in a dynamic library dependency on zlib1.dll
+  # results in a dynamic library dependency on zlib1.dll for release builds and
+  # zlibd1.dll for debug builds.
   find_package(ZLIB REQUIRED)
 
-# Get the zlib DLL path for bundling
-# vcpkg installs zlib1.dll in the bin directory
-if(ZLIB_FOUND)
-  get_filename_component(ZLIB_LIB_DIR "${ZLIB_LIBRARY_RELEASE}" DIRECTORY)
-  get_filename_component(ZLIB_ROOT_DIR "${ZLIB_LIB_DIR}" DIRECTORY)
-  set(ZLIB_DLL "${ZLIB_ROOT_DIR}/bin/zlib1.dll")
-  if(EXISTS "${ZLIB_DLL}")
-    message(STATUS "Found zlib DLL: ${ZLIB_DLL}")
-  else()
-    # Fallback: check vcpkg installed directory
-    if(DEFINED ENV{VCPKG_ROOT})
-      set(ZLIB_DLL "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}/bin/zlib1.dll")
-    elseif(EXISTS "C:/vcpkg/installed/${VCPKG_TARGET_TRIPLET}/bin/zlib1.dll")
-      set(ZLIB_DLL "C:/vcpkg/installed/${VCPKG_TARGET_TRIPLET}/bin/zlib1.dll")
+  # Get the zlib DLL paths for bundling. vcpkg installs runtime DLLs next to
+  # bin/ for release and debug/bin/ for debug.
+  if(ZLIB_FOUND)
+    if(ZLIB_LIBRARY_RELEASE)
+      get_filename_component(ZLIB_RELEASE_LIB_DIR "${ZLIB_LIBRARY_RELEASE}" DIRECTORY)
+      get_filename_component(ZLIB_RELEASE_ROOT_DIR "${ZLIB_RELEASE_LIB_DIR}" DIRECTORY)
+      set(ZLIB_RELEASE_DLL "${ZLIB_RELEASE_ROOT_DIR}/bin/zlib1.dll")
+      if(NOT EXISTS "${ZLIB_RELEASE_DLL}")
+        if(DEFINED ENV{VCPKG_ROOT})
+          set(ZLIB_RELEASE_DLL "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}/bin/zlib1.dll")
+        elseif(EXISTS "C:/vcpkg/installed/${VCPKG_TARGET_TRIPLET}/bin/zlib1.dll")
+          set(ZLIB_RELEASE_DLL "C:/vcpkg/installed/${VCPKG_TARGET_TRIPLET}/bin/zlib1.dll")
+        endif()
+      endif()
+      if(EXISTS "${ZLIB_RELEASE_DLL}")
+        list(APPEND ZLIB_DLLS "${ZLIB_RELEASE_DLL}")
+        message(STATUS "Found release zlib DLL: ${ZLIB_RELEASE_DLL}")
+      else()
+        message(WARNING "zlib1.dll not found - release app builds may fail to load")
+      endif()
     endif()
-    if(EXISTS "${ZLIB_DLL}")
-      message(STATUS "Found zlib DLL (fallback): ${ZLIB_DLL}")
-    else()
-      message(WARNING "zlib1.dll not found - app may fail to load")
+
+    if(ZLIB_LIBRARY_DEBUG)
+      get_filename_component(ZLIB_DEBUG_LIB_DIR "${ZLIB_LIBRARY_DEBUG}" DIRECTORY)
+      get_filename_component(ZLIB_DEBUG_ROOT_DIR "${ZLIB_DEBUG_LIB_DIR}" DIRECTORY)
+      set(ZLIB_DEBUG_DLL "${ZLIB_DEBUG_ROOT_DIR}/bin/zlibd1.dll")
+      if(NOT EXISTS "${ZLIB_DEBUG_DLL}")
+        if(DEFINED ENV{VCPKG_ROOT})
+          set(ZLIB_DEBUG_DLL "$ENV{VCPKG_ROOT}/installed/${VCPKG_TARGET_TRIPLET}/debug/bin/zlibd1.dll")
+        elseif(EXISTS "C:/vcpkg/installed/${VCPKG_TARGET_TRIPLET}/debug/bin/zlibd1.dll")
+          set(ZLIB_DEBUG_DLL "C:/vcpkg/installed/${VCPKG_TARGET_TRIPLET}/debug/bin/zlibd1.dll")
+        endif()
+      endif()
+      if(EXISTS "${ZLIB_DEBUG_DLL}")
+        list(APPEND ZLIB_DLLS "${ZLIB_DEBUG_DLL}")
+        message(STATUS "Found debug zlib DLL: ${ZLIB_DEBUG_DLL}")
+      else()
+        message(WARNING "zlibd1.dll not found - debug app builds may fail to load")
+      endif()
     endif()
   endif()
-endif()
 endif()
 
 # ============================================================================
@@ -221,24 +279,31 @@ endif()
 # List of absolute paths to libraries that should be bundled with the plugin.
 if(USE_PREBUILT_WINDOWS)
   # Use pre-built DLLs
-  set(agus_maps_flutter_bundled_libraries
+  set(AGUS_WINDOWS_BUNDLED_LIBRARIES
     # The plugin DLL (MethodChannel handler)
     $<TARGET_FILE:${PLUGIN_NAME}>
     # Pre-built native CoMaps FFI library
     "${PREBUILT_DLL}"
     # Runtime dependencies
-    "${ZLIB_DLL}"
-    PARENT_SCOPE
+    ${ZLIB_DLLS}
   )
 else()
   # Use freshly built DLLs
-  set(agus_maps_flutter_bundled_libraries
+  set(AGUS_WINDOWS_BUNDLED_LIBRARIES
     # The plugin DLL (MethodChannel handler)
     $<TARGET_FILE:${PLUGIN_NAME}>
     # The native CoMaps FFI library
     $<TARGET_FILE:agus_maps_flutter>
     # Runtime dependencies
-    "${ZLIB_DLL}"
-    PARENT_SCOPE
+    ${ZLIB_DLLS}
   )
 endif()
+
+if(AGUS_DUCKDB_WINDOWS_RUNTIME)
+  list(APPEND AGUS_WINDOWS_BUNDLED_LIBRARIES "${AGUS_DUCKDB_WINDOWS_RUNTIME}")
+endif()
+
+set(agus_maps_flutter_bundled_libraries
+  ${AGUS_WINDOWS_BUNDLED_LIBRARIES}
+  PARENT_SCOPE
+)

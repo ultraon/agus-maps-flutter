@@ -49,7 +49,9 @@ public:
     AgusGuiThreadWin()
     {
         m_mainThreadId = GetCurrentThreadId();
+#if !defined(NDEBUG) && !defined(RELEASE)
         LOG(LINFO, ("AgusGuiThreadWin created on thread:", m_mainThreadId));
+#endif
     }
     
     PushResult Push(Task && task) override
@@ -126,9 +128,11 @@ public:
         // Create tmp directory if it doesn't exist
         _mkdir(m_tmpDir.c_str());
         
+#if !defined(NDEBUG) && !defined(RELEASE)
         LOG(LINFO, ("AgusPlatformWin initialized:",
                     "resources =", m_resourcesDir,
                     "writable =", m_writableDir));
+#endif
     }
 };
 
@@ -223,7 +227,7 @@ void Platform::GetAllFiles(std::string const & directory, FilesList & outFiles)
     {
         for (auto const & entry : std::filesystem::directory_iterator(directory))
         {
-            if (entry.is_regular_file())
+            if (entry.is_regular_file() || entry.is_directory())
             {
                 outFiles.push_back(entry.path().filename().string());
             }

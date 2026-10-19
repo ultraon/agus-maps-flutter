@@ -1,4 +1,10 @@
-# Android Implementation Plan (MVP)
+# Android Implementation Plan
+
+This document started as the Android MVP plan. The current Android target has
+advanced beyond file extraction: it now uses a Flutter `Texture` backed by
+Android `SurfaceProducer`, renders CoMaps through Drape/OpenGL ES, supports
+DuckDB-backed project layers, and has specific guardrails for smooth camera
+gestures on physical Android devices.
 
 ## Quick Start: Build & Run
 
@@ -60,9 +66,12 @@ dart run tool/build.dart --no-cache
 cd example
 flutter run --release
 
-# Or build an APK for installation
-flutter build apk --release
-adb install build/app/outputs/flutter-apk/app-release.apk
+# Or build a direct-install APK for the connected device ABI
+flutter build apk --release --split-per-abi
+adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+
+# Build an Android App Bundle for store-style ABI delivery
+flutter build appbundle --release
 ```
 
 **Windows PowerShell:**
@@ -74,16 +83,19 @@ dart run tool/build.dart --no-cache
 cd example
 flutter run --release
 
-# Or build an APK for installation
-flutter build apk --release
-adb install build/app/outputs/flutter-apk/app-release.apk
+# Or build a direct-install APK for the connected device ABI
+flutter build apk --release --split-per-abi
+adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+
+# Build an Android App Bundle for store-style ABI delivery
+flutter build appbundle --release
 ```
 
 **Release mode characteristics:**
 - Flutter: AOT compiled, tree-shaken, minified
 - Native: `-O3` optimization, no debug symbols, no assertions
 - Performance: Full speed, minimal battery usage
-- APK size: ~100MB (stripped, compressed)
+- APK size: native-code heavy; use split-per-ABI APKs or an App Bundle for release distribution. The validated May 3 release outputs were 203.4 MB for `armeabi-v7a`, 231.0 MB for `arm64-v8a`, 237.7 MB for `x86_64`, and 367.3 MB for the App Bundle.
 
 ### Profile Mode (For Android Studio Profiler)
 
@@ -112,7 +124,7 @@ To debug C++ code in Android Studio:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `COMAPS_TAG` | `v2026.01.08-11` | CoMaps git tag to checkout |
+| `COMAPS_TAG` | `v2026.04.23-19` | CoMaps git tag to checkout |
 | `ANDROID_NDK_HOME` | Auto-detected | Path to Android NDK |
 
 ### Standalone Launch (Without Connected Laptop)
@@ -122,7 +134,11 @@ Unlike iOS, Android **does allow** debug builds to be launched standalone from t
 ```bash
 cd example
 
-# Build and install Release APK
+# Build and install a Release APK for the device ABI
+flutter build apk --release --split-per-abi
+adb install build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+
+# Or build a universal APK only for quick local smoke checks
 flutter build apk --release
 adb install build/app/outputs/flutter-apk/app-release.apk
 
@@ -155,21 +171,174 @@ This ensures:
 - **Release builds:** `RELEASE=1` and `NDEBUG=1` are defined
 
 ## Goal
+
 Get the Android example app to:
 
-1. Bundle a Gibraltar map file (`Gibraltar.mwm`) as an example asset.
-2. On first launch, **ensure the map exists as a real file on disk** (extract/copy once if missing).
-3. Pass the on-disk filesystem path into the native layer (FFI) so the native engine can open it using normal filesystem APIs (and later use `mmap`).
-4. Set the initial camera to **Gibraltar** at **zoom 14**.
+1. Extract CoMaps resources and map files to app-private storage as real files.
+2. Pass filesystem paths into the native layer so CoMaps can open `.mwm` files
+   normally.
+3. Render the native map through a Flutter `Texture` using Android
+   `SurfaceProducer`.
+4. Support pan, zoom, rotate, tap selection, routing, map presentation toggles,
+   and DuckDB-backed project layers.
+5. Keep camera gestures smooth on slower physical devices, including Samsung
+   Galaxy S10-class hardware.
 
-This matches how Organic Maps / CoMaps typically operate: maps are stored as standalone `.mwm` files on disk and are memory-mapped / paged by the OS for performance.
+This matches how Organic Maps / CoMaps typically operate: maps are stored as
+standalone `.mwm` files on disk and are memory-mapped / paged by the OS for
+performance.
 
-## Non-Goals (for this MVP)
+## Historical MVP Non-Goals
+
+These were non-goals for the original MVP and are now implemented or partially
+implemented:
+
 - Full Drape rendering + Flutter `Texture` integration.
 - Search/routing.
 - Download manager / storage management.
 
-Those come after we have a repeatable dependency + data workflow and a stable FFI boundary.
+Keep this section only as context when reading older status reports below.
+
+## Current Android Architecture
+
+### Flutter surface
+
+`AgusMap` in `lib/agus_maps_flutter.dart` owns the Flutter-side map surface.
+
+- It creates a native map surface through Pigeon host API
+  `createMapSurface`.
+- It displays the returned texture id with Flutter `Texture`.
+- It forwards touch input through FFI `comaps_touch`.
+- It preserves the native surface during mobile keyboard occlusion via
+  `AgusMapResizePolicy.stableViewport`.
+- It resizes only for real viewport changes such as rotation, split-screen, or
+  device-pixel-ratio changes.
+
+### Android host bridge
+
+`android/src/main/java/app/agus/maps/agus_maps_flutter/AgusMapsFlutterPlugin.java`
+owns Android platform integration.
+
+- `TextureRegistry.SurfaceProducer` creates the render target consumed by
+  Flutter.
+- `nativeSetSurface`, `nativeOnSurfaceChanged`, `nativeOnSizeChanged`, and
+  `nativeOnSurfaceDestroyed` forward lifecycle and size changes to C++.
+- `onFrameReady()` calls `SurfaceProducer.scheduleFrame()` on the main thread so
+  Flutter composites newly rendered native frames.
+- Data files are extracted into app-private storage before the native engine
+  opens map resources.
+
+### Native CoMaps/Drape bridge
+
+`src/agus_maps_flutter.cpp` is the main Android C++ bridge.
+
+- It creates `Framework` after Android paths and a render surface are ready.
+- It creates the Drape engine with OpenGL ES 3.
+- It registers an active-frame callback so Flutter is notified only when Drape
+  renders an active frame.
+- It tracks the current viewport for screen/coordinate projection and
+  DuckDB-backed layer filtering.
+- It exposes FFI for camera movement, touch, routing, place pages, map
+  presentation state, and DuckDB rendering.
+
+`src/agus_ogl.cpp` and `src/agus_ogl.hpp` own the Android EGL context factory.
+
+- The draw context renders to the Android window surface provided by
+  `SurfaceProducer`.
+- The upload context uses a pbuffer surface.
+- Surface resets and size changes are routed through the context factory without
+  recreating the full Flutter widget tree.
+
+## Android Map Rendering Smoothness
+
+### Problem observed on physical device
+
+On a Samsung Galaxy S10-class device, the map could flicker while pan, zoom, and
+rotation gestures were active. After the first mitigation, active gesture
+flicker was reduced, but a single delayed flicker could still occur a few
+milliseconds to about a second after a smooth camera operation completed.
+
+The delayed flicker matched the DuckDB/Drape viewport refresh path:
+
+1. CoMaps viewport changes arrived during camera movement.
+2. The native viewport listener scheduled a DuckDB render-layer refresh.
+3. After the camera became idle, the refresh queried DuckDB and rebuilt Drape
+   user marks.
+4. If the feature set was unchanged, this still caused a visible post-gesture
+   invalidation.
+
+### Current rule
+
+Camera gestures must stay render-only. Pan, zoom, and rotation must not run
+synchronous DuckDB queries or full Drape user-mark rebuilds on the gesture frame
+path.
+
+Project-layer rendering follows these rules:
+
+1. Explicit project-layer mutations refresh immediately:
+   - feature commit;
+   - layer visibility changes;
+   - layer ordering changes;
+   - layer deletion or creation.
+2. Camera-driven refreshes are debounced until the viewport is idle.
+3. The idle refresh compares the newly queried renderable DuckDB feature set
+   against the last published set.
+4. If the feature set is unchanged, the refresh is a no-op and does not call:
+   - `DrapeEngine::UpdateUserMarks`;
+   - `DrapeEngine::InvalidateUserMarks`;
+   - `WakeRenderer`.
+5. If the feature set changed, native user marks are updated incrementally after
+   the first publication by reporting created, updated, and removed mark ids.
+
+This keeps normal camera animation smooth while preserving correctness when
+moving into an area with different visible project-layer features.
+
+### Relevant implementation points
+
+In `src/agus_maps_flutter.cpp`:
+
+- `SetViewportTracking()` records the current viewport and schedules, rather
+  than directly runs, camera-driven DuckDB refreshes.
+- `ScheduleDuckDBRenderRefreshAfterViewportIdle()` waits for viewport generation
+  stability before refreshing.
+- `RefreshDuckDBRenderLayersInternal()` queries visible DuckDB-backed features
+  for the current viewport and zoom.
+- `AreDuckDBRenderableFeaturesEqual()` skips Drape work when an idle refresh
+  returns the same feature set.
+- `DuckDBMarksProvider::SetFeatures()` computes created, removed, and updated
+  mark ids so only the first publication uses Drape's first-time path.
+
+## Android Debugging and Validation
+
+Use `tee` when collecting logs so the output can be inspected after the run:
+
+```bash
+cd example
+flutter run -d RF8M20SAQSL --debug 2>&1 | tee ../output.debug-android.log
+```
+
+For a build-only native compile check:
+
+```bash
+cd example
+flutter build apk --debug 2>&1 | tee ../output.android-build.log
+```
+
+When investigating flicker, look for:
+
+- repeated `nativeOnSizeChanged` or `nativeOnSurfaceChanged` during gestures;
+- `Skipped ... frames!` from Choreographer during map interaction;
+- DuckDB layer refresh logs near post-gesture flicker;
+- EGL errors from `AgusMapsFlutterNative` or `CoMaps`;
+- repeated surface destruction/recreation while the map is visible.
+
+Expected behavior:
+
+- no surface recreation during ordinary pan, zoom, or rotate;
+- no synchronous DuckDB refresh while the camera is actively moving;
+- no Drape user-mark update after idle if the visible renderable feature set did
+  not change;
+- explicit layer edits still appear on the map after commit/refresh.
 
 ## Repository Conventions
 - `thirdparty/` contains checked-out external dependencies (e.g., CoMaps engine sources).
@@ -183,7 +352,7 @@ Those come after we have a repeatable dependency + data workflow and a stable FF
 We pin and fetch the CoMaps repo into `thirdparty/comaps`.
 
 - Repo: `git@github.com:comaps/comaps.git`
-- Default tag: `v2026.01.08-11`
+- Default tag: `v2026.04.23-19`
 - Override tag by setting env var: `COMAPS_TAG`
 
 Commands:
@@ -202,7 +371,7 @@ Environment variables:
 The example app declares and ships:
 - `example/assets/maps/Gibraltar.mwm`
 
-Data source: CoMaps CDN servers (e.g., `https://cdn-fi-1.comaps.app/`) or Organic Maps mirrors (e.g., `https://omaps.webfreak.org/maps/`) as fallback.
+Data source: CoMaps CDN servers from the CoMaps source defaults and metaserver, such as `https://cdn-fi-1.comaps.app/` and `https://mapgen-fi-1.comaps.app/`. Runtime region metadata is parsed from the hierarchical CoMaps `countries.txt`; UI browsing keeps folders/groups intact while downloads operate on leaf `.mwm` files.
 
 Android build config sets `.mwm` as **noCompress** so packaging does not compress the file (this reduces CPU overhead during extraction and avoids surprises).
 

@@ -38,6 +38,10 @@ class MwmMetadata {
   /// Whether this is a bundled asset vs downloaded from mirror
   final bool isBundled;
 
+  /// Whether this is the active version for the region
+  /// Only one version per region should be active at a time
+  final bool isActive;
+
   /// Creates MwmMetadata with normalized file path.
   MwmMetadata({
     required this.regionName,
@@ -47,27 +51,31 @@ class MwmMetadata {
     required String filePath,
     this.sha256,
     this.isBundled = false,
+    this.isActive = true,
   }) : filePath = _normalizePath(filePath);
 
   Map<String, dynamic> toJson() => {
-    'regionName': regionName,
-    'snapshotVersion': snapshotVersion,
-    'fileSize': fileSize,
-    'downloadDate': downloadDate.toIso8601String(),
-    'filePath': filePath,
-    'sha256': sha256,
-    'isBundled': isBundled,
-  };
+        'regionName': regionName,
+        'snapshotVersion': snapshotVersion,
+        'fileSize': fileSize,
+        'downloadDate': downloadDate.toIso8601String(),
+        'filePath': filePath,
+        'sha256': sha256,
+        'isBundled': isBundled,
+        'isActive': isActive,
+      };
 
   factory MwmMetadata.fromJson(Map<String, dynamic> json) => MwmMetadata(
-    regionName: json['regionName'] as String,
-    snapshotVersion: json['snapshotVersion'] as String,
-    fileSize: json['fileSize'] as int,
-    downloadDate: DateTime.parse(json['downloadDate'] as String),
-    filePath: json['filePath'] as String,  // Will be normalized in constructor
-    sha256: json['sha256'] as String?,
-    isBundled: json['isBundled'] as bool? ?? false,
-  );
+        regionName: json['regionName'] as String,
+        snapshotVersion: json['snapshotVersion'] as String,
+        fileSize: json['fileSize'] as int,
+        downloadDate: DateTime.parse(json['downloadDate'] as String),
+        filePath:
+            json['filePath'] as String, // Will be normalized in constructor
+        sha256: json['sha256'] as String?,
+        isBundled: json['isBundled'] as bool? ?? false,
+        isActive: json['isActive'] as bool? ?? true,
+      );
 
   @override
   String toString() =>
@@ -116,12 +124,63 @@ class MwmStorage {
   /// Get all stored metadata.
   List<MwmMetadata> getAll() => List.unmodifiable(_cache);
 
-  /// Get metadata for a specific region.
+  /// Get metadata for a specific region (returns active version).
   MwmMetadata? getByRegion(String regionName) {
+    // First try to find active version
+    for (final m in _cache) {
+      if (m.regionName == regionName && m.isActive) return m;
+    }
+    // Fallback to any version for backwards compatibility
     for (final m in _cache) {
       if (m.regionName == regionName) return m;
     }
     return null;
+  }
+
+  /// Get all versions for a specific region, sorted by version descending.
+  List<MwmMetadata> getAllVersions(String regionName) {
+    final versions = _cache.where((m) => m.regionName == regionName).toList();
+    versions.sort((a, b) => b.snapshotVersion.compareTo(a.snapshotVersion));
+    return versions;
+  }
+
+  /// Get active version for a region.
+  MwmMetadata? getActiveVersion(String regionName) {
+    for (final m in _cache) {
+      if (m.regionName == regionName && m.isActive) return m;
+    }
+    return null;
+  }
+
+  /// Get metadata for a specific region and version.
+  MwmMetadata? getByRegionAndVersion(
+      String regionName, String snapshotVersion) {
+    for (final m in _cache) {
+      if (m.regionName == regionName && m.snapshotVersion == snapshotVersion) {
+        return m;
+      }
+    }
+    return null;
+  }
+
+  /// Get all metadata ordered by the specified mode.
+  List<MwmMetadata> getAllOrdered(dynamic orderMode) {
+    final sorted = List<MwmMetadata>.from(_cache);
+    sorted.sort((a, b) {
+      // Handle both enum and string mode
+      final modeStr = orderMode.toString().split('.').last;
+      if (modeStr == 'byMap') {
+        final byRegion = a.regionName.compareTo(b.regionName);
+        if (byRegion != 0) return byRegion;
+        return b.snapshotVersion.compareTo(a.snapshotVersion);
+      } else {
+        // byDate
+        final byVersion = b.snapshotVersion.compareTo(a.snapshotVersion);
+        if (byVersion != 0) return byVersion;
+        return a.regionName.compareTo(b.regionName);
+      }
+    });
+    return sorted;
   }
 
   /// Check if a region is downloaded.
@@ -131,16 +190,79 @@ class MwmStorage {
 
   /// Add or update metadata for a region.
   ///
-  /// If the region already exists, it will be replaced.
+  /// If a different version of the region already exists, the old version
+  /// is marked inactive and preserved. The new version becomes active.
+  /// If the same version already exists, it's updated in place.
   Future<void> upsert(MwmMetadata metadata) async {
-    _cache.removeWhere((m) => m.regionName == metadata.regionName);
-    _cache.add(metadata);
+    // Check if this exact version already exists
+    final existingIndex = _cache.indexWhere(
+      (m) =>
+          m.regionName == metadata.regionName &&
+          m.snapshotVersion == metadata.snapshotVersion,
+    );
+
+    if (existingIndex != -1) {
+      // Update existing version in place
+      _cache[existingIndex] = metadata;
+    } else {
+      // New version - mark all other versions of this region as inactive
+      for (var i = 0; i < _cache.length; i++) {
+        if (_cache[i].regionName == metadata.regionName && _cache[i].isActive) {
+          _cache[i] = MwmMetadata(
+            regionName: _cache[i].regionName,
+            snapshotVersion: _cache[i].snapshotVersion,
+            fileSize: _cache[i].fileSize,
+            downloadDate: _cache[i].downloadDate,
+            filePath: _cache[i].filePath,
+            sha256: _cache[i].sha256,
+            isBundled: _cache[i].isBundled,
+            isActive: false,
+          );
+        }
+      }
+      // Add new version as active
+      _cache.add(metadata);
+    }
+    await _save();
+  }
+
+  /// Set the active version for a region.
+  ///
+  /// Marks the specified version as active and all other versions as inactive.
+  Future<void> setActiveVersion(
+    String regionName,
+    String snapshotVersion,
+  ) async {
+    for (var i = 0; i < _cache.length; i++) {
+      if (_cache[i].regionName == regionName) {
+        _cache[i] = MwmMetadata(
+          regionName: _cache[i].regionName,
+          snapshotVersion: _cache[i].snapshotVersion,
+          fileSize: _cache[i].fileSize,
+          downloadDate: _cache[i].downloadDate,
+          filePath: _cache[i].filePath,
+          sha256: _cache[i].sha256,
+          isBundled: _cache[i].isBundled,
+          isActive: _cache[i].snapshotVersion == snapshotVersion,
+        );
+      }
+    }
     await _save();
   }
 
   /// Remove metadata for a region.
-  Future<void> remove(String regionName) async {
-    _cache.removeWhere((m) => m.regionName == regionName);
+  ///
+  /// If [snapshotVersion] is provided, removes only that version.
+  /// Otherwise, removes all versions of the region.
+  Future<void> remove(String regionName, {String? snapshotVersion}) async {
+    if (snapshotVersion != null) {
+      _cache.removeWhere(
+        (m) =>
+            m.regionName == regionName && m.snapshotVersion == snapshotVersion,
+      );
+    } else {
+      _cache.removeWhere((m) => m.regionName == regionName);
+    }
     await _save();
   }
 
@@ -152,14 +274,17 @@ class MwmStorage {
 
   /// Check if an update is available for a region.
   ///
-  /// Compares the stored snapshot version with the latest available version.
-  /// Returns false for bundled files (they don't get updated).
+  /// Compares the stored active snapshot version with the latest available version.
   bool hasUpdate(String regionName, String latestSnapshotVersion) {
-    final current = getByRegion(regionName);
+    final current = getActiveVersion(regionName);
     if (current == null) return false;
-    if (current.isBundled) {
-      return false; // Don't suggest updates for bundled files
+
+    final currentVersion = int.tryParse(current.snapshotVersion);
+    final latestVersion = int.tryParse(latestSnapshotVersion);
+    if (currentVersion != null && latestVersion != null) {
+      return currentVersion < latestVersion;
     }
+
     return current.snapshotVersion != latestSnapshotVersion;
   }
 
@@ -320,7 +445,7 @@ class MwmStorage {
   /// Returns [DeleteResult] with success status and any error message.
   Future<DeleteResult> deleteMap(String regionName) async {
     final metadata = getByRegion(regionName);
-    
+
     if (metadata == null) {
       return DeleteResult(
         regionName: regionName,
@@ -339,17 +464,17 @@ class MwmStorage {
 
     try {
       final file = File(metadata.filePath);
-      
+
       // Delete the file if it exists
       if (await file.exists()) {
         await file.delete();
         debugPrint('[MwmStorage] Deleted file: ${metadata.filePath}');
       }
-      
+
       // Remove metadata
       await remove(regionName);
       debugPrint('[MwmStorage] Removed metadata for: $regionName');
-      
+
       return DeleteResult(
         regionName: regionName,
         success: true,
@@ -409,7 +534,7 @@ class DeleteResult {
   @override
   String toString() {
     if (success) {
-      final mb = deletedBytes != null 
+      final mb = deletedBytes != null
           ? ' (${(deletedBytes! / (1024 * 1024)).toStringAsFixed(1)} MB freed)'
           : '';
       return 'DeleteResult($regionName: success$mb)';

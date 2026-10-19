@@ -339,8 +339,12 @@ Windows builds can render a small overlay in the **upper-right corner** of the m
 - The interop blit flips Y to match D3D texture orientation. The overlay must therefore render with a **top‑left origin** when drawn into the interop FBO.
 - The CPU path keeps the standard OpenGL bottom‑left origin.
 
-**Disable overlay:**
-- Set `AGUS_MAPS_WIN_OVERLAY=0` (default is enabled).
+**Diagnostics overlay:**
+- Debug builds show `AGUS_MAPS_WIN_OVERLAY` diagnostics by default.
+- Release builds hide the overlay by default to avoid per-frame diagnostic text
+  rendering during production map interaction.
+- Set `AGUS_MAPS_WIN_OVERLAY=1` to force it on, or `AGUS_MAPS_WIN_OVERLAY=0` to
+  force it off.
 
 **Custom lines (native):**
 Developers can append lines from native code using:
@@ -1390,7 +1394,7 @@ dart run tool/build.dart --no-cache
 
 ### "Could NOT find ZLIB (missing: ZLIB_LIBRARY ZLIB_INCLUDE_DIR)"
 
-**Cause:** CMake is using the wrong vcpkg installation (e.g., Visual Studio's bundled vcpkg instead of your installed C:\vcpkg).
+**Cause:** CMake is using the wrong vcpkg installation (e.g., Visual Studio's bundled vcpkg instead of your dedicated local or global installation).
 
 **Solution:**
 1. Install zlib via vcpkg: `C:\vcpkg\vcpkg.exe install zlib:x64-windows --classic`
@@ -1399,6 +1403,40 @@ dart run tool/build.dart --no-cache
 4. Rebuild: `flutter build windows --release`
 
 The CMakeLists.txt checks for the actual presence of `zlib.lib` before selecting a vcpkg installation, ensuring it uses a vcpkg that actually has the required packages.
+
+**Solution 2:**
+1. Clean the build directory from the root: 
+    ```powershell
+    Remove-Item -Recurse -Force example\build\windows
+    ```
+2. Set the CMake prefix env variable: 
+    ```powershell
+    $env:CMAKE_PREFIX_PATH = "$PWD\vcpkg_installed\x64-windows"
+    ```
+3. Reinstall vcpkg dependencies: 
+    ```powershell
+    vcpkg install
+    ```
+4. Navigate to the example app directory and rebuild: 
+    ```powershell
+    cd example 
+    flutter build windows --release
+    ```
+
+### Windows Release Build Fails during INSTALL Phase (Error MSB3073)
+
+**Cause:** The build fails with error `MSB3073` during the `vcpkg` `INSTALL` phase because the deployment script unconditionally searches for a `native_assets/windows` folder that does not exist.
+
+**Solution:**
+1. Force-create the missing empty directory structure from the repository root:
+   ```powershell
+   New-Item -ItemType Directory -Path ".\example\build\native_assets\windows" -Force
+   ```
+4. Navigate to the example app directory and rebuild: 
+    ```powershell
+    cd example 
+    flutter build windows --release
+    ```
 
 ### "MissingPluginException: No implementation found for method extractMap"
 
@@ -1445,6 +1483,10 @@ endif()
 **Symptom:** The map widget shows a solid brownish/tan color instead of map content, but no crash occurs.
 
 **Possible Causes:**
+
+**Root resource layout check:** `World.mwm`, `WorldCoasts.mwm`, and `icudt75l.dat` must live directly in `%USERPROFILE%\Documents\agus_maps_flutter\`. If logs contain `Can't find any: World` or `Can't find any: WorldCoasts`, these files were extracted under `maps/` instead of the resource root. The Windows extractor and example app now normalize these bundled resources before native initialization.
+
+**Versioned country map scan check:** Country maps such as `Gibraltar.mwm` must live under a version directory such as `%USERPROFILE%\Documents\agus_maps_flutter\260421\Gibraltar.mwm`, and `Platform::GetAllFiles()` must return directories as well as files. If the log loads `World` and `WorldCoasts` but never says `Found file: Gibraltar`, CoMaps is not seeing the version directory during `RegisterAllMaps()`.
 
 1. **Frame callback not connected:** The `AgusWglContextFactory::m_frameCallback` is not set, so `CopyToSharedTexture()` runs but Flutter is never notified.
    - Check logs for "[AgusMapsFlutter] WGL factory frame callback set"

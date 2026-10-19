@@ -2,12 +2,34 @@
 
 import 'dart:io';
 import 'package:path/path.dart' as path;
-import 'config.dart' show BuildConfig, BuildMode, getComapsTag;
+import 'config.dart'
+    show
+        BuildConfig,
+        BuildMode,
+        getComapsTag,
+        getDuckdbSpatialTag,
+        getDuckdbTag;
 import 'platform_detector.dart'
-    show getRepoRoot, getComapsDir, getBuildDir, detectOS, OSType;
+    show
+        getRepoRoot,
+        getComapsDir,
+        getDuckdbDir,
+        getDuckdbSpatialDir,
+        getBuildDir,
+        getPatchesDir,
+        detectOS,
+        OSType;
 import 'git_operations.dart'
-    show cloneComaps, checkoutComapsTag, initSubmodules;
-import 'patch_applicator.dart' show applyPatches;
+    show
+        checkoutComapsTag,
+        checkoutGitRef,
+        cloneComaps,
+        cloneGitRepository,
+        initRepositorySubmodules,
+        initSubmodules,
+        isGitCheckout,
+        updateSubmodule;
+import 'patch_applicator.dart' show applyDependencyPatches, applyPatches;
 import 'file_operations.dart' show ensureDir, copyPath;
 import 'assets_updater.dart'
     show syncLocalizedStringsAssets, copyDataFiles, updateExampleAssetsList;
@@ -19,7 +41,41 @@ import 'cmake_build.dart'
         buildMacOSXCFramework,
         buildWindowsLibrary,
         buildLinuxLibrary;
+import 'duckdb_build.dart'
+    show
+        buildDuckDBAndroidArchives,
+        buildDuckDBiOSXCFramework,
+        buildDuckDBMacOSXCFramework,
+        buildDuckDBWindowsRuntime;
+import 'duckdb_migration_generator.dart' show generateDuckDBMigrations;
 import 'archive_manager.dart' show createTarGz, extractTarGz;
+
+const int _minSymbolsPngBytes = 100000;
+const int _minSymbolsSdfBytes = 1000;
+const List<String> _symbolsDpiFolders = [
+  '6plus',
+  'mdpi',
+  'hdpi',
+  'xhdpi',
+  'xxhdpi',
+  'xxxhdpi',
+];
+const List<String> _symbolsStyleFolders = ['light', 'dark'];
+const String _metalToolchainFallback =
+    'If Xcode reports a missing Metal Toolchain, run: '
+    'xcodebuild -downloadComponent MetalToolchain';
+
+class _MetalShaderTools {
+  const _MetalShaderTools({
+    required this.metalPath,
+    required this.metallibPath,
+    required this.macosSdkPath,
+  });
+
+  final String metalPath;
+  final String metallibPath;
+  final String macosSdkPath;
+}
 
 /// Build runner configuration
 class BuildRunnerConfig {
@@ -56,32 +112,46 @@ Future<void> runBuild(BuildRunnerConfig config) async {
 
 /// Contributor build workflow (build from source)
 Future<void> _runContributorBuild(BuildRunnerConfig config) async {
-  final tag = getComapsTag();
+  final comapsTag = getComapsTag();
+  final duckdbTag = getDuckdbTag();
+  final duckdbSpatialTag = getDuckdbSpatialTag();
 
   print('=== Contributor Build (from source) ===');
-  print('CoMaps tag: $tag');
+  print('CoMaps tag: $comapsTag');
+  print('DuckDB tag: $duckdbTag');
+  print('duckdb-spatial tag/ref: $duckdbSpatialTag');
   print('');
 
+  // Keep the embedded native manifest in sync with the reviewable SQL files.
+  await generateDuckDBMigrations();
+
   // Step 1: Bootstrap CoMaps
-  await _bootstrapComaps(tag,
+  await _bootstrapComaps(comapsTag,
       skipPatches: config.skipPatches, noCache: config.noCache);
 
-  // Step 2: Build Boost headers
+  // Step 2: Bootstrap DuckDB dependencies
+  await _bootstrapDuckdbDependencies(
+    duckdbTag,
+    duckdbSpatialTag,
+    skipPatches: config.skipPatches,
+  );
+
+  // Step 3: Build Boost headers
   await _buildBoostHeaders();
 
-  // Step 3: Generate CoMaps data files
+  // Step 4: Generate CoMaps data files
   await _generateComapsData();
 
-  // Step 4: Sync localized strings into Flutter assets
+  // Step 5: Sync localized strings into Flutter assets
   await syncLocalizedStringsAssets();
 
-  // Step 5: Copy data files to example/assets
+  // Step 6: Copy data files to example/assets
   await copyDataFiles();
 
-  // Step 6: Update example pubspec assets list after asset sync/copy
+  // Step 7: Update example pubspec assets list after asset sync/copy
   await updateExampleAssetsList();
 
-  // Step 7: Build native binaries (if requested)
+  // Step 8: Build native binaries (if requested)
   bool builtIOS = false;
   bool builtMacOS = false;
 
@@ -93,15 +163,19 @@ Future<void> _runContributorBuild(BuildRunnerConfig config) async {
       // Track iOS/macOS builds for Metal shaders and CocoaPods
       if (platform == 'ios') builtIOS = true;
       if (platform == 'macos') builtMacOS = true;
-
-      // Setup CocoaPods after iOS/macOS builds
-      if (platform == 'ios' || platform == 'macos') {
-        await _setupCocoaPods(platform);
-      }
     }
 
     if (Platform.isMacOS && (builtIOS || builtMacOS)) {
       await _buildMetalShaders();
+    }
+
+    // CocoaPods validates resource paths declared in the podspec, so install
+    // pods only after the Metal shader bundle has been copied into place.
+    if (builtIOS) {
+      await _setupCocoaPods('ios');
+    }
+    if (builtMacOS) {
+      await _setupCocoaPods('macos');
     }
   } else {
     print('');
@@ -111,6 +185,82 @@ Future<void> _runContributorBuild(BuildRunnerConfig config) async {
 
   print('');
   print('=== Build Complete ===');
+}
+
+Future<void> _bootstrapDuckdbDependencies(
+  String duckdbRef,
+  String duckdbSpatialRef, {
+  bool skipPatches = false,
+}) async {
+  print('=== Bootstrap DuckDB Dependencies ===');
+
+  await _bootstrapGitSubmoduleDependency(
+    dependencyName: 'DuckDB',
+    relativePath: 'thirdparty/duckdb',
+    repositoryUrl: 'https://github.com/duckdb/duckdb.git',
+    targetDir: getDuckdbDir(),
+    ref: duckdbRef,
+    patchesName: 'duckdb',
+    skipPatches: skipPatches,
+  );
+
+  await _bootstrapGitSubmoduleDependency(
+    dependencyName: 'duckdb-spatial',
+    relativePath: 'thirdparty/duckdb-spatial',
+    repositoryUrl: 'https://github.com/duckdb/duckdb-spatial.git',
+    targetDir: getDuckdbSpatialDir(),
+    ref: duckdbSpatialRef,
+    patchesName: 'duckdb-spatial',
+    skipPatches: skipPatches,
+  );
+
+  print('');
+}
+
+Future<void> _bootstrapGitSubmoduleDependency({
+  required String dependencyName,
+  required String relativePath,
+  required String repositoryUrl,
+  required String targetDir,
+  required String ref,
+  required String patchesName,
+  bool skipPatches = false,
+}) async {
+  print('--- $dependencyName ---');
+
+  if (!await isGitCheckout(targetDir)) {
+    print('$dependencyName checkout not initialized; updating submodule');
+    try {
+      await updateSubmodule(relativePath);
+    } catch (e) {
+      print(
+        '$dependencyName submodule update failed; cloning repository instead',
+      );
+      await cloneGitRepository(
+        url: repositoryUrl,
+        targetDir: targetDir,
+        dependencyName: dependencyName,
+      );
+    }
+  } else {
+    print('$dependencyName checkout already initialized at $targetDir');
+  }
+
+  await checkoutGitRef(ref, dir: targetDir, dependencyName: dependencyName);
+  await initRepositorySubmodules(
+    dir: targetDir,
+    dependencyName: dependencyName,
+  );
+
+  if (!skipPatches) {
+    await applyDependencyPatches(
+      dependencyName: dependencyName,
+      sourceDir: targetDir,
+      patchesDir: getPatchesDir(patchesName),
+    );
+  } else {
+    print('Skipping $dependencyName patches (--skip-patches)');
+  }
 }
 
 /// Bootstrap CoMaps (clone, checkout, submodules, patches)
@@ -260,22 +410,48 @@ Future<void> _buildBoostHeaders() async {
 
   // Check for flat boost/ directory (created by b2 headers)
   final flatConfigFile = path.join(boostDir, 'boost', 'config.hpp');
+  final requiredFlatHeaders = <String>[
+    flatConfigFile,
+    path.join(boostDir, 'boost', 'regex.hpp'),
+    path.join(boostDir, 'boost', 'container_hash', 'hash.hpp'),
+  ];
 
   // Check for modular structure (libs/config/include/boost/config.hpp)
-  // CoMaps CMake directly includes from modular paths, so we don't need b2 headers
+  // CoMaps CMake directly includes from modular paths, but CocoaPods consumes
+  // the flat boost/ layout on Apple platforms.
   final modularConfigFile =
       path.join(boostDir, 'libs', 'config', 'include', 'boost', 'config.hpp');
 
   print('=== Build Boost Headers ===');
 
-  // First, check if modular structure exists (preferred - no build needed)
+  Future<bool> hasRequiredFlatHeaders() async {
+    for (final headerPath in requiredFlatHeaders) {
+      if (!await File(headerPath).exists()) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Check if flat structure already exists (from previous b2 headers run).
+  if (await hasRequiredFlatHeaders()) {
+    print('Boost flat headers already built');
+    print('');
+    return;
+  }
+
+  // First, check if modular structure exists.
   if (await File(modularConfigFile).exists()) {
     print('Boost modular headers found (libs/*/include structure)');
-    print(
-        'CMake will use modular include paths directly - no b2 headers needed');
 
     // Verify a few more essential modules exist
-    final essentialModules = ['regex', 'container', 'iterator', 'range'];
+    final essentialModules = [
+      'regex',
+      'container',
+      'container_hash',
+      'iterator',
+      'range',
+    ];
     var allFound = true;
     for (final module in essentialModules) {
       final modulePath = path.join(boostDir, 'libs', module, 'include');
@@ -287,18 +463,16 @@ Future<void> _buildBoostHeaders() async {
 
     if (allFound) {
       print('All essential Boost modules verified');
-      print('');
-      return;
+      if (!Platform.isMacOS) {
+        print(
+            'CMake will use modular include paths directly - no b2 headers needed');
+        print('');
+        return;
+      }
+      print('Apple plugin builds require flat boost/ headers; running b2.');
     } else {
       print('Some Boost modules missing, will try to build headers...');
     }
-  }
-
-  // Check if flat structure already exists (from previous b2 headers run)
-  if (await File(flatConfigFile).exists()) {
-    print('Boost flat headers already built (boost/config.hpp exists)');
-    print('');
-    return;
   }
 
   if (!await Directory(boostDir).exists()) {
@@ -306,7 +480,6 @@ Future<void> _buildBoostHeaders() async {
   }
 
   // If we get here, we need to run b2 headers to create the flat structure
-  // This is a fallback path - normally the modular structure should be sufficient
   print('Building flat Boost headers with b2...');
 
   final b2Exe = Platform.isWindows
@@ -403,9 +576,9 @@ call bootstrap.bat
   }
 
   // Verify headers were generated
-  if (!await File(flatConfigFile).exists()) {
+  if (!await hasRequiredFlatHeaders()) {
     throw Exception(
-        'b2 headers completed but config.hpp not found at: $flatConfigFile');
+        'b2 headers completed but required Boost flat headers are missing');
   }
 
   print('Boost headers built');
@@ -460,18 +633,12 @@ Future<void> _generateComapsData() async {
   final visibilityFile = path.join(dataDir, 'visibility.txt');
   final categoriesFile = path.join(dataDir, 'categories.txt');
 
-  final symbolsSdf =
-      path.join(dataDir, 'symbols', 'xxhdpi', 'light', 'symbols.sdf');
-  final symbolsPng =
-      path.join(dataDir, 'symbols', 'xxhdpi', 'light', 'symbols.png');
-
   final dataAlreadyGenerated = await File(classificatorFile).exists() &&
       await File(typesFile).exists() &&
       await File(visibilityFile).exists() &&
       await File(categoriesFile).exists();
 
-  final symbolsReady =
-      await File(symbolsSdf).exists() && await File(symbolsPng).exists();
+  final symbolsReady = await _symbolsAtlasesReady(dataDir);
 
   if (dataAlreadyGenerated && symbolsReady) {
     print('Data files already generated');
@@ -486,6 +653,7 @@ Future<void> _generateComapsData() async {
   env['DATA_PATH'] = dataDir;
   env['PYTHONUTF8'] = '1';
   env['PYTHONIOENCODING'] = 'utf-8';
+  await _configurePythonForComapsCmake(env);
 
   Future<void> runUnixDataScripts() async {
     // Generate drawing rules
@@ -534,24 +702,22 @@ Future<void> _generateComapsData() async {
     }
 
     // Generate symbols atlas (symbols.png + symbols.sdf)
-    final symbolsSdf =
-        path.join(dataDir, 'symbols', 'xxhdpi', 'light', 'symbols.sdf');
-    final symbolsPng =
-        path.join(dataDir, 'symbols', 'xxhdpi', 'light', 'symbols.png');
-    if (!await File(symbolsSdf).exists() || !await File(symbolsPng).exists()) {
-      final generateSymbolsScript =
-          path.join(comapsDir, 'tools', 'unix', 'generate_symbols.sh');
-      if (await File(generateSymbolsScript).exists()) {
-        print('Generating symbols atlas (symbols.png/symbols.sdf)...');
+    if (!await _symbolsAtlasesReady(dataDir)) {
+      print('Generating symbols atlas using Dart skin generator...');
+      final skinGeneratorDir =
+          path.join(getRepoRoot(), 'tool', 'skin_generator_tool');
+      if (await Directory(skinGeneratorDir).exists()) {
         await runProcess(
-          'bash',
-          [generateSymbolsScript],
-          workingDirectory: comapsDir,
+          'flutter',
+          ['test', 'test/generate_test.dart'],
+          workingDirectory: skinGeneratorDir,
           environment: env,
         );
+        await _validateSymbolsAtlases(dataDir);
       } else {
-        print(
-            'Warning: generate_symbols.sh not found; symbols atlas may be missing');
+        throw StateError(
+          'Dart skin generator not found at $skinGeneratorDir',
+        );
       }
     } else {
       print('Symbols atlas already generated');
@@ -578,6 +744,88 @@ Future<void> _generateComapsData() async {
   print('');
 }
 
+Future<bool> _symbolsAtlasesReady(String dataDir) async {
+  final invalid = await _findInvalidSymbolsAtlases(dataDir);
+  return invalid.isEmpty;
+}
+
+Future<void> _validateSymbolsAtlases(String dataDir) async {
+  final invalid = await _findInvalidSymbolsAtlases(dataDir);
+  if (invalid.isEmpty) return;
+
+  throw StateError(
+    'Generated symbols atlas is missing or too small: ${invalid.join(', ')}',
+  );
+}
+
+Future<List<String>> _findInvalidSymbolsAtlases(String dataDir) async {
+  final invalid = <String>[];
+  for (final dpi in _symbolsDpiFolders) {
+    for (final style in _symbolsStyleFolders) {
+      final pngPath = path.join(dataDir, 'symbols', dpi, style, 'symbols.png');
+      final sdfPath = path.join(dataDir, 'symbols', dpi, style, 'symbols.sdf');
+      if (!await _fileHasMinSize(pngPath, _minSymbolsPngBytes)) {
+        invalid.add(path.relative(pngPath, from: dataDir));
+      }
+      if (!await _fileHasMinSize(sdfPath, _minSymbolsSdfBytes)) {
+        invalid.add(path.relative(sdfPath, from: dataDir));
+      }
+    }
+  }
+  return invalid;
+}
+
+Future<bool> _fileHasMinSize(String filePath, int minBytes) async {
+  final file = File(filePath);
+  if (!await file.exists()) return false;
+  return await file.length() >= minBytes;
+}
+
+Future<void> _configurePythonForComapsCmake(Map<String, String> env) async {
+  final python = await _findCompatiblePythonProtobuf();
+  if (python == null) {
+    throw StateError(
+      'CoMaps data generation requires Python protobuf >=3.20 and <4.0. '
+      'Create .venv with protobuf 3.x or install a compatible system package.',
+    );
+  }
+
+  env['PYTHON3_EXECUTABLE'] = python;
+  print('Using Python for CoMaps CMake: $python');
+}
+
+Future<String?> _findCompatiblePythonProtobuf() async {
+  final repoRoot = getRepoRoot();
+  final venvPython = Platform.isWindows
+      ? path.join(repoRoot, '.venv', 'Scripts', 'python.exe')
+      : path.join(repoRoot, '.venv', 'bin', 'python');
+  final candidates = <String>[
+    if (await File(venvPython).exists()) venvPython,
+    if (await commandExists('python3')) 'python3',
+    if (await commandExists('python')) 'python',
+  ];
+
+  for (final candidate in candidates) {
+    final result = await runProcess(
+      candidate,
+      [
+        '-c',
+        'import sys\n'
+            'try:\n'
+            ' import google.protobuf as p\n'
+            ' parts = tuple(int(x) for x in p.__version__.split(".")[:2])\n'
+            ' sys.exit(0 if (3, 20) <= parts < (4, 0) else 2)\n'
+            'except Exception:\n'
+            ' sys.exit(1)\n',
+      ],
+      throwOnError: false,
+    );
+    if (result.exitCode == 0) return candidate;
+  }
+
+  return null;
+}
+
 /// Copy data files to example/assets
 Future<void> _copyDataFiles() async {
   final repoRoot = getRepoRoot();
@@ -597,7 +845,9 @@ Future<void> _copyDataFiles() async {
   final essentialFiles = [
     'classificator.txt',
     'types.txt',
+    'subtypes.csv',
     'categories.txt',
+    'categories_brands.txt',
     'visibility.txt',
     'countries.txt',
     'countries_meta.txt',
@@ -630,6 +880,7 @@ Future<void> _copyDataFiles() async {
     'categories-strings',
     'countries-strings',
     'fonts',
+    'sound-strings',
     'symbols',
     'styles'
   ];
@@ -710,9 +961,14 @@ Future<void> _buildAndroid() async {
   final outputDir = path.join(getBuildDir(), 'agus-binaries-android');
   await ensureDir(outputDir);
 
+  final duckdbAndroidRoot = await buildDuckDBAndroidArchives();
+
   for (final abi in BuildConfig.androidAbis) {
     print('Building Android $abi...');
-    await buildAndroidAbi(abi);
+    await buildAndroidAbi(
+      abi,
+      duckdbAndroidDir: path.join(duckdbAndroidRoot, abi),
+    );
   }
 
   // Copy to android/prebuilt
@@ -724,6 +980,7 @@ Future<void> _buildAndroid() async {
 /// Build iOS XCFramework
 Future<void> _buildiOS() async {
   await buildiOSXCFramework();
+  await buildDuckDBiOSXCFramework();
 
   // Copy to ios/Frameworks
   final outputDir = path.join(getBuildDir(), 'agus-binaries-ios');
@@ -735,11 +992,20 @@ Future<void> _buildiOS() async {
     await copyPath(
         xcframeworkPath, path.join(frameworksDir, 'CoMaps.xcframework'));
   }
+
+  final duckdbXcframeworkPath = path.join(outputDir, 'DuckDB.xcframework');
+  if (await Directory(duckdbXcframeworkPath).exists()) {
+    await copyPath(
+      duckdbXcframeworkPath,
+      path.join(frameworksDir, 'DuckDB.xcframework'),
+    );
+  }
 }
 
 /// Build macOS XCFramework
 Future<void> _buildMacOS() async {
   await buildMacOSXCFramework();
+  await buildDuckDBMacOSXCFramework();
 
   // Copy to macos/Frameworks
   final outputDir = path.join(getBuildDir(), 'agus-binaries-macos');
@@ -751,11 +1017,20 @@ Future<void> _buildMacOS() async {
     await copyPath(
         xcframeworkPath, path.join(frameworksDir, 'CoMaps.xcframework'));
   }
+
+  final duckdbXcframeworkPath = path.join(outputDir, 'DuckDB.xcframework');
+  if (await Directory(duckdbXcframeworkPath).exists()) {
+    await copyPath(
+      duckdbXcframeworkPath,
+      path.join(frameworksDir, 'DuckDB.xcframework'),
+    );
+  }
 }
 
 /// Build Windows library
 Future<void> _buildWindows() async {
-  await buildWindowsLibrary();
+  final duckdbWindowsDir = await buildDuckDBWindowsRuntime();
+  await buildWindowsLibrary(duckdbWindowsDir: duckdbWindowsDir);
 
   // Copy to windows/prebuilt/x64
   final outputDir = path.join(getBuildDir(), 'agus-binaries-windows', 'x64');
@@ -838,6 +1113,13 @@ Future<void> _buildMetalShaders() async {
 
   print('Compiling Metal shaders from $shadersDir...');
 
+  final tools = await _resolveMetalShaderTools();
+  print(_formatMetalToolchainDetails(
+    metalPath: tools.metalPath,
+    metallibPath: tools.metallibPath,
+    macosSdkPath: tools.macosSdkPath,
+  ));
+
   // Find all .metal files
   final metalFiles = <String>[];
   await for (final entity in Directory(shadersDir).list(recursive: false)) {
@@ -854,94 +1136,139 @@ Future<void> _buildMetalShaders() async {
 
   // Compile each .metal file to .air
   final airFiles = <String>[];
+  final compileFailures = <String>[];
   for (final metalFile in metalFiles) {
     final filename = path.basename(metalFile);
     final name = path.basenameWithoutExtension(metalFile);
     final airFile = path.join(tempDir, '$name.air');
 
-    try {
-      // Try with macosx SDK first (works for both macOS and iOS with Metal 2.0)
-      await runProcess(
-        'xcrun',
-        [
-          '-sdk',
-          'macosx',
-          'metal',
-          '-c',
-          '-std=osx-metal2.0',
-          '-I',
-          shadersDir,
-          '-o',
-          airFile,
-          metalFile
-        ],
-        throwOnError: false,
-      );
+    // Use the macOS SDK; the resulting metallib is packaged for iOS and macOS.
+    final result = await runProcess(
+      tools.metalPath,
+      [
+        '-c',
+        '-std=osx-metal2.0',
+        '-isysroot',
+        tools.macosSdkPath,
+        '-I',
+        shadersDir,
+        '-o',
+        airFile,
+        metalFile
+      ],
+      throwOnError: false,
+    );
 
-      if (await File(airFile).exists()) {
-        airFiles.add(airFile);
-        print('  Compiled: $filename');
-      }
-    } catch (e) {
-      print('Warning: Failed to compile $filename: $e');
+    if (result.exitCode == 0 && await File(airFile).exists()) {
+      airFiles.add(airFile);
+      print('  Compiled: $filename');
+    } else {
+      final details = [
+        '  Failed: $filename (exit ${result.exitCode})',
+        if (result.stdout.toString().trim().isNotEmpty)
+          '  stdout: ${result.stdout.toString().trim()}',
+        if (result.stderr.toString().trim().isNotEmpty)
+          '  stderr: ${result.stderr.toString().trim()}',
+      ].join('\n');
+      compileFailures.add(details);
+      print(details);
     }
   }
 
   if (airFiles.isEmpty) {
-    print('Warning: No Metal shaders compiled successfully');
-    return;
+    throw StateError(
+      'No Metal shaders compiled successfully.\n'
+      '${_formatMetalToolchainDetails(
+        metalPath: tools.metalPath,
+        metallibPath: tools.metallibPath,
+        macosSdkPath: tools.macosSdkPath,
+      )}\n'
+      '${compileFailures.join('\n')}\n'
+      'Apple rendering requires shaders_metal.metallib. '
+      '$_metalToolchainFallback',
+    );
   }
 
   // Link .air files to .metallib
   print('Linking ${airFiles.length} shaders...');
-  try {
-    await runProcess(
-      'xcrun',
-      ['-sdk', 'macosx', 'metallib', '-o', outputLib, ...airFiles],
-      throwOnError: false,
+  final linkResult = await runProcess(
+    tools.metallibPath,
+    ['-o', outputLib, ...airFiles],
+    throwOnError: false,
+  );
+
+  if (linkResult.exitCode != 0 || !await File(outputLib).exists()) {
+    throw StateError(
+      'Failed to link Metal library.\n'
+      '${_formatMetalToolchainDetails(
+        metalPath: tools.metalPath,
+        metallibPath: tools.metallibPath,
+        macosSdkPath: tools.macosSdkPath,
+      )}\n'
+      'stdout: ${linkResult.stdout.toString().trim()}\n'
+      'stderr: ${linkResult.stderr.toString().trim()}\n'
+      '$_metalToolchainFallback',
     );
-
-    if (!await File(outputLib).exists()) {
-      print('Warning: Failed to link Metal library');
-      return;
-    }
-
-    print('Created: ${path.basename(outputLib)}');
-
-    // Copy to platform resource directories
-    final iosResources = path.join(repoRoot, 'ios', 'Resources');
-    final macosResources = path.join(repoRoot, 'macos', 'Resources');
-
-    await ensureDir(iosResources);
-    await ensureDir(macosResources);
-
-    final iosDest = path.join(iosResources, 'shaders_metal.metallib');
-    final macosDest = path.join(macosResources, 'shaders_metal.metallib');
-
-    await File(outputLib).copy(iosDest);
-    await File(outputLib).copy(macosDest);
-
-    print('Copied to ios/Resources/');
-    print('Copied to macos/Resources/');
-  } catch (e) {
-    print('Warning: Failed to link Metal library: $e');
   }
 
-  await _buildSimulatorMetalLibrary(
-      metalFiles, shadersDir, path.join(repoRoot, 'ios', 'Resources'));
+  print('Created: ${path.basename(outputLib)}');
+
+  // Copy to platform resource directories used by CocoaPods and SwiftPM.
+  final resourceDirectories = [
+    path.join(repoRoot, 'ios', 'Resources'),
+    path.join(
+      repoRoot,
+      'ios',
+      'agus_maps_flutter',
+      'Sources',
+      'agus_maps_flutter',
+      'Resources',
+    ),
+    path.join(repoRoot, 'macos', 'Resources'),
+    path.join(
+      repoRoot,
+      'macos',
+      'agus_maps_flutter',
+      'Sources',
+      'agus_maps_flutter',
+      'Resources',
+    ),
+  ];
+
+  for (final resourceDirectory in resourceDirectories) {
+    await ensureDir(resourceDirectory);
+    final destination = path.join(
+      resourceDirectory,
+      'shaders_metal.metallib',
+    );
+    await File(outputLib).copy(destination);
+    print('Copied to ${path.relative(resourceDirectory, from: repoRoot)}/');
+  }
+
+  await _buildSimulatorMetalLibrary(metalFiles, shadersDir, [
+    path.join(repoRoot, 'ios', 'Resources'),
+    path.join(
+      repoRoot,
+      'ios',
+      'agus_maps_flutter',
+      'Sources',
+      'agus_maps_flutter',
+      'Resources',
+    ),
+  ]);
 }
 
 /// Build `shaders_metal_sim.metallib` for the iOS Simulator.
 ///
 /// The simulator's Metal runtime rejects libraries compiled for devices or
 /// macOS, so the engine loads this separate library when it runs there.
-Future<void> _buildSimulatorMetalLibrary(
-    List<String> metalFiles, String shadersDir, String iosResources) async {
+Future<void> _buildSimulatorMetalLibrary(List<String> metalFiles,
+    String shadersDir, List<String> iosResourceDirectories) async {
   final tempDir = path.join(getBuildDir(), 'metal_temp_simulator');
   final outputLib =
       path.join(getBuildDir(), 'metal_shaders', 'shaders_metal_sim.metallib');
   await ensureDir(tempDir);
-  await ensureDir(iosResources);
+  await ensureDir(path.dirname(outputLib));
 
   print('Compiling Metal shaders for the iOS Simulator...');
   final airFiles = <String>[];
@@ -954,9 +1281,13 @@ Future<void> _buildSimulatorMetalLibrary(
   }
 
   await _runSimulatorMetal(['-o', outputLib, ...airFiles]);
-  await File(outputLib)
-      .copy(path.join(iosResources, 'shaders_metal_sim.metallib'));
-  print('Copied ${path.basename(outputLib)} to ios/Resources/');
+  for (final resourceDirectory in iosResourceDirectories) {
+    await ensureDir(resourceDirectory);
+    await File(outputLib)
+        .copy(path.join(resourceDirectory, 'shaders_metal_sim.metallib'));
+    print('Copied ${path.basename(outputLib)} to '
+        '${path.relative(resourceDirectory, from: getRepoRoot())}/');
+  }
 }
 
 /// Run the Metal compiler or linker for the iOS Simulator target.
@@ -964,6 +1295,116 @@ Future<void> _runSimulatorMetal(List<String> arguments) async {
   final target = 'air64-apple-ios${BuildConfig.iosDeploymentTarget}-simulator';
   await runProcess('xcrun',
       ['-sdk', 'iphonesimulator', 'metal', '-target', target, ...arguments]);
+}
+
+Future<_MetalShaderTools> _resolveMetalShaderTools() async {
+  final metal = await _tryResolveXcrunToolPath('metal');
+  final metallib = await _tryResolveXcrunToolPath('metallib');
+  final macosSdk = await _tryResolveMacOSSdkPath();
+  final failures = [
+    if (metal.error != null) metal.error!,
+    if (metallib.error != null) metallib.error!,
+    if (macosSdk.error != null) macosSdk.error!,
+  ];
+
+  if (failures.isNotEmpty) {
+    throw StateError(
+      'Failed to resolve the Metal shader toolchain.\n'
+      '${_formatMetalToolchainDetails(
+        metalPath: metal.path,
+        metallibPath: metallib.path,
+        macosSdkPath: macosSdk.path,
+      )}\n'
+      '${failures.join('\n')}\n'
+      '$_metalToolchainFallback',
+    );
+  }
+
+  return _MetalShaderTools(
+    metalPath: metal.path!,
+    metallibPath: metallib.path!,
+    macosSdkPath: macosSdk.path!,
+  );
+}
+
+Future<({String? path, String? error})> _tryResolveXcrunToolPath(
+  String toolName,
+) async {
+  final result = await runProcess(
+    'xcrun',
+    ['--find', toolName],
+    throwOnError: false,
+  );
+  final toolPath = result.stdout.toString().trim();
+  if (result.exitCode != 0 || toolPath.isEmpty) {
+    return (
+      path: toolPath.isEmpty ? null : toolPath,
+      error: [
+        'xcrun --find $toolName failed with exit ${result.exitCode}.',
+        _formatProcessOutput(result),
+      ].join('\n'),
+    );
+  }
+
+  if (!await File(toolPath).exists()) {
+    return (
+      path: toolPath,
+      error: 'xcrun --find $toolName returned a missing path: $toolPath',
+    );
+  }
+
+  return (path: toolPath, error: null);
+}
+
+Future<({String? path, String? error})> _tryResolveMacOSSdkPath() async {
+  final result = await runProcess(
+    'xcrun',
+    ['--sdk', 'macosx', '--show-sdk-path'],
+    throwOnError: false,
+  );
+  final sdkPath = result.stdout.toString().trim();
+  if (result.exitCode != 0 || sdkPath.isEmpty) {
+    return (
+      path: sdkPath.isEmpty ? null : sdkPath,
+      error: [
+        'xcrun --sdk macosx --show-sdk-path failed with exit '
+            '${result.exitCode}.',
+        _formatProcessOutput(result),
+      ].join('\n'),
+    );
+  }
+
+  if (!await Directory(sdkPath).exists()) {
+    return (
+      path: sdkPath,
+      error: 'xcrun returned a missing macOS SDK path: $sdkPath',
+    );
+  }
+
+  return (path: sdkPath, error: null);
+}
+
+String _formatMetalToolchainDetails({
+  required String? metalPath,
+  required String? metallibPath,
+  required String? macosSdkPath,
+}) {
+  return [
+    'Metal toolchain:',
+    '  metal: ${metalPath ?? 'not resolved'}',
+    '  metallib: ${metallibPath ?? 'not resolved'}',
+    '  macOS SDK: ${macosSdkPath ?? 'not resolved'}',
+  ].join('\n');
+}
+
+String _formatProcessOutput(ProcessResult result) {
+  final stdoutText = result.stdout.toString().trim();
+  final stderrText = result.stderr.toString().trim();
+  final output = [
+    if (stdoutText.isNotEmpty) 'stdout: $stdoutText',
+    if (stderrText.isNotEmpty) 'stderr: $stderrText',
+  ];
+  return output.isEmpty ? 'No output captured.' : output.join('\n');
 }
 
 /// Setup CocoaPods for iOS or macOS
