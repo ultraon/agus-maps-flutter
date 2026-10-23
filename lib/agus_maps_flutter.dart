@@ -1914,6 +1914,26 @@ void setMyLocationMode(MyLocationMode mode) {
   _bindings.comaps_set_my_location_mode(mode.index);
 }
 
+NativeCallable<Void Function(Int)>? _myLocationModeCallable;
+
+/// Calls [listener] with the current my-position mode right away, then after
+/// each mode change (a button tap, a map pan, a first GPS fix). Pass null to
+/// stop. Call it after the map is ready.
+void setMyLocationModeListener(void Function(MyLocationMode mode)? listener) {
+  // Remove the native pointer before the old callable is closed.
+  _bindings.comaps_set_my_position_mode_listener(nullptr);
+  _myLocationModeCallable?.close();
+  _myLocationModeCallable = null;
+  if (listener == null) return;
+  final callable = NativeCallable<Void Function(Int)>.listener((int mode) {
+    if (mode >= 0 && mode < MyLocationMode.values.length) {
+      listener(MyLocationMode.values[mode]);
+    }
+  });
+  _myLocationModeCallable = callable;
+  _bindings.comaps_set_my_position_mode_listener(callable.nativeFunction);
+}
+
 // =============================================================================
 // Custom Marker Functions
 // =============================================================================

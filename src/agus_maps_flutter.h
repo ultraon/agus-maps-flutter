@@ -328,6 +328,11 @@ FFI_PLUGIN_EXPORT void comaps_set_visible_viewport(double left, double top, doub
 // by factor (>1 zooms in) in one camera move. Keeps the follow modes.
 FFI_PLUGIN_EXPORT void comaps_scale_and_center(double lat, double lon, double factor, int animated);
 
+// Register a listener for "my position" mode changes (values as in
+// comaps_set_my_location_mode). It runs once right away with the current
+// mode, then on the GUI thread after each change. Pass NULL to remove it.
+FFI_PLUGIN_EXPORT void comaps_set_my_position_mode_listener(void (*listener)(int mode));
+
 // Scroll/pan the map by pixel distance
 // distanceX, distanceY: Distance to scroll in physical pixels
 FFI_PLUGIN_EXPORT void comaps_scroll(double distanceX, double distanceY);

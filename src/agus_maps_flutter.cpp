@@ -2585,6 +2585,25 @@ FFI_PLUGIN_EXPORT void comaps_scale_and_center(double lat, double lon, double fa
     }
 }
 
+// The Dart listener for "my position" mode changes, or null.
+static std::atomic<void (*)(int)> g_myPositionModeListener{nullptr};
+
+FFI_PLUGIN_EXPORT void comaps_set_my_position_mode_listener(void (*listener)(int mode)) {
+    g_myPositionModeListener = listener;
+    if (!g_framework) {
+        return;
+    }
+    // The engine calls this on the GUI thread after each mode change.
+    g_framework->SetMyPositionModeListener([](location::EMyPositionMode mode, bool) {
+        if (auto fn = g_myPositionModeListener.load()) {
+            fn(static_cast<int>(mode));
+        }
+    });
+    if (listener) {
+        listener(static_cast<int>(g_framework->GetMyPositionMode()));
+    }
+}
+
 FFI_PLUGIN_EXPORT void comaps_scroll(double distanceX, double distanceY) {
     if (!g_framework || !g_drapeEngineCreated) {
         return;

@@ -1025,6 +1025,28 @@ class AgusMapsFlutterBindings {
   late final _comaps_scale_and_center = _comaps_scale_and_centerPtr
       .asFunction<void Function(double, double, double, int)>();
 
+  /// Register a listener for "my position" mode changes (values as in
+  /// comaps_set_my_location_mode). It runs once right away with the current
+  /// mode, then on the GUI thread after each change. Pass NULL to remove it.
+  void comaps_set_my_position_mode_listener(
+    ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int mode)>> listener,
+  ) {
+    return _comaps_set_my_position_mode_listener(
+      listener,
+    );
+  }
+
+  late final _comaps_set_my_position_mode_listenerPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Void Function(
+              ffi.Pointer<
+                  ffi.NativeFunction<ffi.Void Function(ffi.Int mode)>>)>>(
+      'comaps_set_my_position_mode_listener');
+  late final _comaps_set_my_position_mode_listener =
+      _comaps_set_my_position_mode_listenerPtr.asFunction<
+          void Function(
+              ffi.Pointer<ffi.NativeFunction<ffi.Void Function(ffi.Int mode)>>)>();
+
   /// Scroll/pan the map by pixel distance
   /// distanceX, distanceY: Distance to scroll in physical pixels
   void comaps_scroll(
