@@ -319,6 +319,15 @@ FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_avoid_routing_options(void);
 // This is the preferred method for scroll wheel zoom on desktop platforms.
 FFI_PLUGIN_EXPORT void comaps_scale(double factor, double pixelX, double pixelY, int animated);
 
+// Set the visible part of the map surface in physical pixels. The engine
+// places the "my position" point at the centre of this rectangle in the
+// follow modes, and centres camera moves on it. Ignored below 100 px.
+FFI_PLUGIN_EXPORT void comaps_set_visible_viewport(double left, double top, double right, double bottom);
+
+// Move the point (lat, lon) to the centre of the visible viewport and zoom
+// by factor (>1 zooms in) in one camera move. Keeps the follow modes.
+FFI_PLUGIN_EXPORT void comaps_scale_and_center(double lat, double lon, double factor, int animated);
+
 // Scroll/pan the map by pixel distance
 // distanceX, distanceY: Distance to scroll in physical pixels
 FFI_PLUGIN_EXPORT void comaps_scroll(double distanceX, double distanceY);

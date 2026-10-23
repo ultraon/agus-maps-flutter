@@ -978,6 +978,53 @@ class AgusMapsFlutterBindings {
   late final _comaps_scale =
       _comaps_scalePtr.asFunction<void Function(double, double, double, int)>();
 
+  /// Set the visible part of the map surface in physical pixels. The engine
+  /// places the "my position" point at the centre of this rectangle in the
+  /// follow modes, and centres camera moves on it. Ignored below 100 px.
+  void comaps_set_visible_viewport(
+    double left,
+    double top,
+    double right,
+    double bottom,
+  ) {
+    return _comaps_set_visible_viewport(
+      left,
+      top,
+      right,
+      bottom,
+    );
+  }
+
+  late final _comaps_set_visible_viewportPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Void Function(ffi.Double, ffi.Double, ffi.Double,
+              ffi.Double)>>('comaps_set_visible_viewport');
+  late final _comaps_set_visible_viewport = _comaps_set_visible_viewportPtr
+      .asFunction<void Function(double, double, double, double)>();
+
+  /// Move the point (lat, lon) to the centre of the visible viewport and zoom
+  /// by factor (>1 zooms in) in one camera move. Keeps the follow modes.
+  void comaps_scale_and_center(
+    double lat,
+    double lon,
+    double factor,
+    int animated,
+  ) {
+    return _comaps_scale_and_center(
+      lat,
+      lon,
+      factor,
+      animated,
+    );
+  }
+
+  late final _comaps_scale_and_centerPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Void Function(ffi.Double, ffi.Double, ffi.Double,
+              ffi.Int)>>('comaps_scale_and_center');
+  late final _comaps_scale_and_center = _comaps_scale_and_centerPtr
+      .asFunction<void Function(double, double, double, int)>();
+
   /// Scroll/pan the map by pixel distance
   /// distanceX, distanceY: Distance to scroll in physical pixels
   void comaps_scroll(

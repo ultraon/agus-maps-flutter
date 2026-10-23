@@ -1833,6 +1833,37 @@ FFI_PLUGIN_EXPORT void comaps_scale(double factor, double pixelX, double pixelY,
     g_framework->Scale(factor, m2::PointD(pixelX, pixelY), animated != 0);
 }
 
+// The last rectangle passed to comaps_set_visible_viewport, empty until then.
+static m2::RectD g_visibleViewport;
+
+FFI_PLUGIN_EXPORT void comaps_set_visible_viewport(double left, double top, double right, double bottom) {
+    if (!g_framework || !g_drapeEngineCreated) {
+        return;
+    }
+    g_visibleViewport = m2::RectD(left, top, right, bottom);
+    g_framework->SetVisibleViewport(g_visibleViewport);
+}
+
+FFI_PLUGIN_EXPORT void comaps_scale_and_center(double lat, double lon, double factor, int animated) {
+    if (!g_framework || !g_drapeEngineCreated || factor <= 0.0) {
+        return;
+    }
+    // The engine moves the centre point to the pixel-rect centre, then zooms
+    // around the visible-viewport centre. Moving a shifted point instead
+    // puts (lat, lon) at the visible-viewport centre after the zoom.
+    m2::PointD center = mercator::FromLatLon(lat, lon);
+    {
+        std::lock_guard<std::mutex> lock(g_viewportMutex);
+        if (g_currentScreen && !g_visibleViewport.IsEmptyInterior()) {
+            auto const shift = g_currentScreen->PixelRect().Center() - g_visibleViewport.Center();
+            center = g_currentScreen->PtoG(g_currentScreen->GtoP(center) + shift);
+        }
+    }
+    if (auto engine = g_framework->GetDrapeEngine()) {
+        engine->ScaleAndSetCenter(center, factor, animated != 0, false /* trackVisibleViewport */);
+    }
+}
+
 FFI_PLUGIN_EXPORT void comaps_scroll(double distanceX, double distanceY) {
     if (!g_framework || !g_drapeEngineCreated) {
         return;

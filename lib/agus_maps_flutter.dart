@@ -1808,6 +1808,21 @@ void scaleMap(
   _bindings.comaps_scale(factor, pixelX, pixelY, animated ? 1 : 0);
 }
 
+/// Set the visible part of the map surface, in physical pixels.
+///
+/// In the follow modes the engine keeps the "my position" point at the
+/// centre of this rectangle, so an app can move the point away from the
+/// screen centre (for example above a bottom panel).
+void setVisibleViewport(double left, double top, double right, double bottom) {
+  _bindings.comaps_set_visible_viewport(left, top, right, bottom);
+}
+
+/// Move [lat], [lon] to the centre of the visible viewport and zoom by
+/// [factor] (>1 zooms in) in one camera move. The follow modes stay on.
+void scaleAndCenter(double lat, double lon, double factor, {bool animated = true}) {
+  _bindings.comaps_scale_and_center(lat, lon, factor, animated ? 1 : 0);
+}
+
 /// Scroll/pan the map by pixel distance.
 ///
 /// [distanceX], [distanceY] are the distances to scroll in physical pixels.
