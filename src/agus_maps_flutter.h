@@ -348,7 +348,10 @@ FFI_PLUGIN_EXPORT void comaps_debug_list_mwms();
 // Debug: Check if a lat/lon point is covered by any registered MWM
 FFI_PLUGIN_EXPORT void comaps_debug_check_point(double lat, double lon);
 
-// Deregister a map file by path
+// Deregister a map file by path. Returns 0 when deregistered, 1 when no map
+// of that name is registered, -1 when the framework is not initialized and
+// -2 for an empty path or an exception. Implemented on Android and iOS only;
+// the desktop shims keep their stubs.
 FFI_PLUGIN_EXPORT int comaps_deregister_map(const char* fullPath);
 
 // Get the count of registered maps

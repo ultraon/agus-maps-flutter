@@ -1440,6 +1440,27 @@ int registerSingleMapWithVersion(String fullPath, int version) {
   }
 }
 
+/// Deregister a map file that was registered by full path, so the engine
+/// stops rendering and searching it. Once no reader holds the map, the engine
+/// also deletes the file (`Storage::DeleteCustomCountryVersion`).
+/// Implemented on Android and iOS only.
+///
+/// Returns 0 when deregistered (the engine finishes once no reader holds the
+/// map), 1 when no map of that name is registered, -1 when the framework is
+/// not initialized and -2 for an empty path or a native exception.
+int deregisterSingleMap(String fullPath) {
+  String normalizedPath = fullPath;
+  if (Platform.isWindows) {
+    normalizedPath = fullPath.replaceAll('/', '\\');
+  }
+  final pathPtr = normalizedPath.toNativeUtf8().cast<Char>();
+  try {
+    return _bindings.comaps_deregister_map(pathPtr);
+  } finally {
+    malloc.free(pathPtr);
+  }
+}
+
 /// Debug: List all registered MWMs and their bounds.
 /// Output goes to Android logcat (tag: AgusMapsFlutterNative).
 void debugListMwms() {

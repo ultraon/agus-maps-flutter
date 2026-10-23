@@ -1092,6 +1092,13 @@ static bool IsMapAlreadyRegistered(std::string const & countryName, int64_t requ
         if (!info || info->GetCountryName() != countryName) {
             continue;
         }
+        // A map marked to deregister is still listed until its last reader
+        // lets go. MwmSet::Register turns it back to registered, so let the
+        // caller register it again. A reader that still holds the old file
+        // keeps it until the cache drops that handle.
+        if (!info->IsRegistered()) {
+            continue;
+        }
 
         int64_t const registeredVersion =
             static_cast<int64_t>(info->GetVersion());
@@ -2702,6 +2709,56 @@ FFI_PLUGIN_EXPORT int comaps_register_single_map_with_version(const char* fullPa
         __android_log_print(ANDROID_LOG_ERROR, "AgusMapsFlutterNative",
             "comaps_register_single_map_with_version: Exception: %s", e.what());
         return -2;  // Error: Exception
+    }
+}
+
+// Mirrors the engine part of Framework::OnCountryFileDelete, which is not
+// public. Framework only hands out a const DataSource, but the object itself
+// is not const, so the const_cast is safe. While a reader still holds the map,
+// MwmSet only marks it and finishes when the last handle is released.
+FFI_PLUGIN_EXPORT int comaps_deregister_map(const char* fullPath) {
+    __android_log_print(ANDROID_LOG_DEBUG, "AgusMapsFlutterNative",
+        "comaps_deregister_map: %s", fullPath ? fullPath : "(null)");
+
+    if (!g_framework) {
+        __android_log_print(ANDROID_LOG_ERROR, "AgusMapsFlutterNative",
+            "comaps_deregister_map: Framework not initialized");
+        return -1;
+    }
+
+    try {
+        std::string name(fullPath ? fullPath : "");
+        if (name.empty()) {
+            __android_log_print(ANDROID_LOG_ERROR, "AgusMapsFlutterNative",
+                "comaps_deregister_map: Empty path");
+            return -2;
+        }
+        base::GetNameFromFullPath(name);
+        base::GetNameWithoutExt(name);
+
+        platform::CountryFile const countryFile(name);
+        auto & dataSource = const_cast<DataSource &>(g_framework->GetDataSource());
+        auto const id = dataSource.GetMwmIdByCountryFile(countryFile);
+        if (!id.IsAlive()) {
+            __android_log_print(ANDROID_LOG_INFO, "AgusMapsFlutterNative",
+                "comaps_deregister_map: %s is not registered", name.c_str());
+            return 1;
+        }
+        m2::RectD const rect = id.GetInfo()->m_bordersRect;
+
+        g_framework->GetSearchAPI().CancelAllSearches();
+        g_framework->GetRoutingManager().ResetRoutingSession();
+        dataSource.Deregister(countryFile);
+        g_framework->InvalidateRect(rect);
+        g_framework->GetSearchAPI().ClearCaches();
+
+        __android_log_print(ANDROID_LOG_INFO, "AgusMapsFlutterNative",
+            "comaps_deregister_map: Successfully deregistered %s", fullPath);
+        return 0;
+    } catch (std::exception const & e) {
+        __android_log_print(ANDROID_LOG_ERROR, "AgusMapsFlutterNative",
+            "comaps_deregister_map: Exception: %s", e.what());
+        return -2;
     }
 }
 

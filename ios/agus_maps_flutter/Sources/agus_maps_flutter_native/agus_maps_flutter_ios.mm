@@ -989,6 +989,13 @@ static bool IsMapAlreadyRegistered(std::string const & countryName, int64_t requ
         if (!info || info->GetCountryName() != countryName) {
             continue;
         }
+        // A map marked to deregister is still listed until its last reader
+        // lets go. MwmSet::Register turns it back to registered, so let the
+        // caller register it again. A reader that still holds the old file
+        // keeps it until the cache drops that handle.
+        if (!info->IsRegistered()) {
+            continue;
+        }
 
         int64_t const registeredVersion =
             static_cast<int64_t>(info->GetVersion());
@@ -2058,14 +2065,54 @@ FFI_PLUGIN_EXPORT int comaps_register_single_map_with_version(const char* fullPa
     }
 }
 
+// Mirrors the engine part of Framework::OnCountryFileDelete, which is not
+// public. Framework only hands out a const DataSource, but the object itself
+// is not const, so the const_cast is safe. While a reader still holds the map,
+// MwmSet only marks it and finishes when the last handle is released.
 FFI_PLUGIN_EXPORT int comaps_deregister_map(const char* fullPath) {
-    NSLog(@"[AgusMapsFlutter] comaps_deregister_map: %s (not implemented)", fullPath);
-    
-    // TODO: Implement map deregistration when needed
-    // Framework only exposes const DataSource, and DeregisterMap requires non-const
-    // For MVP, maps are registered at startup and not deregistered at runtime
-    
-    return -1;  // Not implemented
+    NSLog(@"[AgusMapsFlutter] comaps_deregister_map: %s", fullPath ? fullPath : "(null)");
+
+    if (!g_framework) {
+        NSLog(@"[AgusMapsFlutter] Framework not initialized");
+        return -1;
+    }
+
+    try {
+        std::string name(fullPath ? fullPath : "");
+        if (name.empty()) {
+            NSLog(@"[AgusMapsFlutter] Empty path");
+            return -2;
+        }
+        auto lastSlash = name.rfind('/');
+        if (lastSlash != std::string::npos) {
+            name = name.substr(lastSlash + 1);
+        }
+        auto dotPos = name.rfind('.');
+        if (dotPos != std::string::npos) {
+            name = name.substr(0, dotPos);
+        }
+
+        platform::CountryFile const countryFile(name);
+        auto & dataSource = const_cast<DataSource &>(g_framework->GetDataSource());
+        auto const id = dataSource.GetMwmIdByCountryFile(countryFile);
+        if (!id.IsAlive()) {
+            NSLog(@"[AgusMapsFlutter] %s is not registered", name.c_str());
+            return 1;
+        }
+        m2::RectD const rect = id.GetInfo()->m_bordersRect;
+
+        g_framework->GetSearchAPI().CancelAllSearches();
+        g_framework->GetRoutingManager().ResetRoutingSession();
+        dataSource.Deregister(countryFile);
+        g_framework->InvalidateRect(rect);
+        g_framework->GetSearchAPI().ClearCaches();
+
+        NSLog(@"[AgusMapsFlutter] Successfully deregistered %s", fullPath);
+        return 0;
+    } catch (std::exception const & e) {
+        NSLog(@"[AgusMapsFlutter] Exception deregistering map: %s", e.what());
+        return -2;
+    }
 }
 
 FFI_PLUGIN_EXPORT int comaps_get_registered_maps_count(void) {
