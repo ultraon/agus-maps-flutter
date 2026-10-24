@@ -1,8 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index fe4eb10da..4ea5b5d4a 100644
+index 71868df2e..59b64e358 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -22,7 +22,8 @@ if (POLICY CMP0156)
+@@ -23,7 +23,8 @@ if (POLICY CMP0156)
    cmake_policy(SET CMP0156 NEW)
  endif()
  
@@ -12,7 +12,7 @@ index fe4eb10da..4ea5b5d4a 100644
  set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${OMIM_ROOT}/cmake")
  
  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-@@ -83,6 +84,8 @@ endif()
+@@ -84,6 +85,8 @@ endif()
  # Global compile options for all configurations.
  if (MSVC)
    add_compile_options(/utf-8)
@@ -21,7 +21,7 @@ index fe4eb10da..4ea5b5d4a 100644
    add_link_options(/INCREMENTAL:NO)
  else()
    add_compile_options(-ffast-math $<$<CXX_COMPILER_ID:GNU>:-Wno-psabi>)
-@@ -96,19 +99,28 @@ if (PLATFORM_WIN)
+@@ -100,19 +103,28 @@ if (PLATFORM_WIN)
  endif()
  
  # Built-in CMake configurations: Debug, Release, RelWithDebInfo, MinSizeRel
@@ -53,7 +53,7 @@ index fe4eb10da..4ea5b5d4a 100644
  endif()
  
  if (${CMAKE_BUILD_TYPE} STREQUAL "RelWithDebInfo")
-@@ -137,7 +149,7 @@ find_package(Threads REQUIRED)
+@@ -141,7 +153,7 @@ find_package(Threads REQUIRED)
  
  # Scripts
  
@@ -62,7 +62,7 @@ index fe4eb10da..4ea5b5d4a 100644
    list(APPEND qt_components Core Network)
    if (NOT SKIP_QT_GUI OR NOT SKIP_TESTS OR PYBINDINGS)
      list(APPEND qt_components Widgets)
-@@ -157,7 +169,8 @@ if (NOT PLATFORM_IPHONE AND NOT PLATFORM_ANDROID)
+@@ -161,7 +173,8 @@ if (NOT PLATFORM_IPHONE AND NOT PLATFORM_ANDROID)
  endif()
  
  # To allow #include "base/file_name.hpp" in all sources.
@@ -72,7 +72,7 @@ index fe4eb10da..4ea5b5d4a 100644
  
  if (USE_PCH)
    message(STATUS "Precompiled headers are ON")
-@@ -187,6 +200,24 @@ endif()
+@@ -191,6 +204,24 @@ endif()
  
  find_package(ZLIB REQUIRED)
  
@@ -97,24 +97,25 @@ index fe4eb10da..4ea5b5d4a 100644
  # Include 3party dependencies.
  add_subdirectory(3party)
  
-@@ -196,41 +227,43 @@ if (PLATFORM_DESKTOP AND NOT WITH_SYSTEM_PROVIDED_3PARTY)
+@@ -200,9 +231,6 @@ if (PLATFORM_DESKTOP AND NOT WITH_SYSTEM_PROVIDED_3PARTY)
    include_directories("${PROJECT_BINARY_DIR}/3party/gflags/include")
  endif()
  
 -# Fix for #include <boost/regex.hpp>
 -include_directories("${OMIM_ROOT}/3party/boost")
 -
- # without this, cmake might ignore the Python Virtual Environment when defined 
- set(Python3_FIND_VIRTUALENV FIRST)
  
  # Used in qt/ and shaders/
  find_package(Python3 REQUIRED COMPONENTS Interpreter)
+@@ -221,32 +249,37 @@ elseif(EXISTS "${OMIM_ROOT}/.venv")
+   message(STATUS "==> Python Virtual Environment detected : ${OMIM_ROOT}/.venv"  "  ==>  "  "Using python command: ${Python3_EXECUTABLE}" )
+ endif()
  
 -execute_process(
 +# Protobuf check is only needed for desktop builds with Qt (generator tools)
 +if (PLATFORM_DESKTOP AND NOT SKIP_QT)
 +  execute_process(
-     COMMAND ${Python3_EXECUTABLE} -c "import google.protobuf; 
+     COMMAND ${Python3_EXECUTABLE} -c "import google.protobuf;
  print(google.protobuf.__version__)"
      RESULT_VARIABLE PROTOBUF_CHECK
      OUTPUT_VARIABLE PROTOBUF_VERSION
@@ -126,15 +127,15 @@ index fe4eb10da..4ea5b5d4a 100644
 -if(PROTOBUF_CHECK EQUAL 0)
 +  if(PROTOBUF_CHECK EQUAL 0)
      if(PROTOBUF_VERSION VERSION_LESS "3.20.0" OR PROTOBUF_VERSION VERSION_GREATER_EQUAL "4.0.0")
--        message(FATAL_ERROR "Python protobuf ${PROTOBUF_VERSION} found, but version (>=3.20, <4.0) is required")
-+      message(FATAL_ERROR "Python protobuf ${PROTOBUF_VERSION} found, but version (>=3.20, <4.0) is required")
+-        message(FATAL_ERROR "Python protobuf ${PROTOBUF_VERSION} found, but version (>=3.20, <4.0) is required. Run ./configure.sh to provision a local .venv with the correct version, or set SKIP_PYTHON_VENV=1 to manage protobuf via your system Python.")
++      message(FATAL_ERROR "Python protobuf ${PROTOBUF_VERSION} found, but version (>=3.20, <4.0) is required. Run ./configure.sh to provision a local .venv with the correct version, or set SKIP_PYTHON_VENV=1 to manage protobuf via your system Python.")
      else()
 -        message(STATUS "Python protobuf ${PROTOBUF_VERSION} found (>=3.20, <4.0)")
 +      message(STATUS "Python protobuf ${PROTOBUF_VERSION} found (>=3.20, <4.0)")
      endif()
 -else()
 +  else()
-     message(FATAL_ERROR "Python protobuf not found. Install version (>=3.20, <4.0)")
+     message(FATAL_ERROR "Python protobuf not found. Run ./configure.sh to provision a local .venv with the correct version (>=3.20, <4.0), or set SKIP_PYTHON_VENV=1 to manage protobuf via your system Python.")
 +  endif()
  endif()
  
@@ -153,7 +154,7 @@ index fe4eb10da..4ea5b5d4a 100644
    if (NOT SKIP_QT_GUI)
      add_subdirectory(qt)
    endif()
-@@ -242,6 +275,6 @@ endif()
+@@ -258,6 +291,6 @@ endif()
  
  omim_add_test_subdirectory(libs/qt_tstfrm)
  
@@ -161,4 +162,3 @@ index fe4eb10da..4ea5b5d4a 100644
 +if (PLATFORM_ANDROID AND NOT SKIP_ANDROID_JNI)
    add_subdirectory(android/sdk/src/main/cpp)
  endif()
--- 

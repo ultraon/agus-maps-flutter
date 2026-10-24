@@ -1,13 +1,15 @@
 diff --git a/libs/platform/platform_mac.mm b/libs/platform/platform_mac.mm
-index ec5d748..df1d039 100644
+index f8794cc65..938d5ef99 100644
 --- a/libs/platform/platform_mac.mm
 +++ b/libs/platform/platform_mac.mm
-@@ -1,14 +1,25 @@
+@@ -1,16 +1,27 @@
  #include "platform/platform.hpp"
 +#include "platform/constants.hpp"
 +#include "platform/platform_unix_impl.hpp"
 +#include "platform/measurement_utils.hpp"
 +#include "platform/settings.hpp"
+ 
+ #include "platform/gui_thread.hpp"
  
  #include "base/file_name_utils.hpp"
  #include "base/logging.hpp"
@@ -28,7 +30,7 @@ index ec5d748..df1d039 100644
  #include <Foundation/NSAutoreleasePool.h>
  #include <Foundation/NSBundle.h>
  #include <Foundation/NSFileManager.h>
-@@ -207,3 +218,92 @@ time_t Platform::GetFileModificationTime(std::string const & path)
+@@ -209,3 +220,92 @@ time_t Platform::GetFileModificationTime(std::string const & path)
    // TODO(AB): Refactor to return std::optional<time_t>.
    return 0;
  }

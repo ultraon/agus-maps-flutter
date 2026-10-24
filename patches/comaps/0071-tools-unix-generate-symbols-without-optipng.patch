@@ -1,5 +1,5 @@
 diff --git a/tools/unix/generate_symbols.sh b/tools/unix/generate_symbols.sh
-index 5f580a812..fd6baab2b 100755
+index 11927c954..ee4e83d57 100755
 --- a/tools/unix/generate_symbols.sh
 +++ b/tools/unix/generate_symbols.sh
 @@ -1,17 +1,11 @@
@@ -23,8 +23,8 @@ index 5f580a812..fd6baab2b 100755
  fi
  
  # Add env var to disable renderer on a display (renderer not working into a Github container)
-@@ -22,9 +16,14 @@ OMIM_PATH="${OMIM_PATH:-$(cd "$(dirname "$0")/../.."; pwd)}"
- BUILD_DIR="$OMIM_PATH/build"
+@@ -22,6 +16,11 @@ OMIM_PATH="${OMIM_PATH:-$(cd "$(dirname "$0")/../.."; pwd)}"
+ BUILD_DIR="$OMIM_PATH/build_$BINARY_NAME"
  SKIN_GENERATOR="${SKIN_GENERATOR:-$BUILD_DIR/$BINARY_NAME}"
  DATA_PATH="$OMIM_PATH/data"
 +declare -a CMAKE_CONFIGURE_ARGS=()
@@ -33,13 +33,18 @@ index 5f580a812..fd6baab2b 100755
 +fi
 +CMAKE_CONFIGURE_ARGS+=("-DSKIP_QT_POSITIONING:bool=true")
  
+ CMAKE_EXTRA_ARGS=""
+ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+@@ -31,7 +30,7 @@ if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+ fi
+ 
  # cmake rebuilds skin generator binary if necessary.
--cmake -S "$OMIM_PATH" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release -DSKIP_TESTS:bool=true
-+cmake -S "$OMIM_PATH" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release -DSKIP_TESTS:bool=true "${CMAKE_CONFIGURE_ARGS[@]}"
+-cmake -S "$OMIM_PATH" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release -DSKIP_TESTS:bool=true $CMAKE_EXTRA_ARGS
++cmake -S "$OMIM_PATH" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release -DSKIP_TESTS:bool=true "${CMAKE_CONFIGURE_ARGS[@]}" $CMAKE_EXTRA_ARGS
  cmake --build "$BUILD_DIR" --target "$BINARY_NAME"
  
  
-@@ -80,8 +79,10 @@ BuildSkin default light xxhdpi  54 light symbols
+@@ -87,8 +86,10 @@ BuildSkin default light xxhdpi  54 light symbols
  BuildSkin default light xxxhdpi 64 light symbols
  
  for i in ${symbols_name[*]}; do

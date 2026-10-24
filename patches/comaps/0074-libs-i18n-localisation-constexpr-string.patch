@@ -1,8 +1,8 @@
-diff --git a/libs/base/localisation.hpp b/libs/base/localisation.hpp
-index 5e917b78c..f7fcb52ce 100644
---- a/libs/base/localisation.hpp
-+++ b/libs/base/localisation.hpp
-@@ -38,7 +38,7 @@ static LanguageIndex constexpr kKoreanRomanizedLanguageIndex = 4;
+diff --git a/libs/i18n/localisation.hpp b/libs/i18n/localisation.hpp
+index fd2a8aa2d..a36bec04c 100644
+--- a/libs/i18n/localisation.hpp
++++ b/libs/i18n/localisation.hpp
+@@ -41,7 +41,7 @@ static LanguageIndex constexpr kKoreanRomanizedLanguageIndex = 4;
  static LanguageIndex constexpr kChineseLanguageIndex = 10;
  static LanguageIndex constexpr kChinesePinyinLanguageIndex = 22;
  static int8_t constexpr kMaxSupportedLanguages = 64;

@@ -11,7 +11,7 @@ enum BuildMode {
 
 /// Configuration constants
 class BuildConfig {
-  static const String defaultComapsTag = 'v2026.04.23-19';
+  static const String defaultComapsTag = 'v2026.10.05-19';
   static const String defaultDuckdbTag = 'v1.5.2';
   static const String defaultDuckdbSpatialTag =
       'dc1996bfd16bd8614fb4ccb5895b3ee0dbd4298e';
