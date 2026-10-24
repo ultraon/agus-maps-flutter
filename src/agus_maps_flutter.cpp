@@ -41,7 +41,7 @@ FFI_PLUGIN_EXPORT int sum_long_running(int a, int b) {
 
 #include "base/file_name_utils.hpp"
 #include "base/logging.hpp"
-#include "base/localisation.hpp"
+#include "i18n/localisation.hpp"
 #include "map/framework.hpp"
 #include "storage/country_info_getter.hpp"
 #include "map/place_page_info.hpp"
@@ -1050,7 +1050,7 @@ void SetOutdoorsEnabledInternal(bool enabled) {
     }
 
     g_outdoorsEnabled = enabled;
-    auto const currentStyle = g_framework->GetMapStyle();
+    auto const currentStyle = GetStyleReader().GetCurrentStyle();
     bool const dark = MapStyleIsDark(currentStyle);
 
     if (enabled) {
@@ -2234,7 +2234,7 @@ FFI_PLUGIN_EXPORT void comaps_set_map_theme(int dark) {
     if (!g_framework) {
         return;
     }
-    auto const currentStyle = g_framework->GetMapStyle();
+    auto const currentStyle = GetStyleReader().GetCurrentStyle();
     ApplyRuntimeMapStyle(dark != 0
         ? GetDarkMapStyleVariant(currentStyle)
         : GetLightMapStyleVariant(currentStyle));
@@ -2245,7 +2245,7 @@ FFI_PLUGIN_EXPORT int comaps_get_map_theme_is_dark(void) {
     if (!g_framework) {
         return 0;
     }
-    return MapStyleIsDark(g_framework->GetMapStyle()) ? 1 : 0;
+    return MapStyleIsDark(GetStyleReader().GetCurrentStyle()) ? 1 : 0;
 }
 
 FFI_PLUGIN_EXPORT void comaps_set_outdoors_enabled(int enabled) {
@@ -2511,7 +2511,7 @@ FFI_PLUGIN_EXPORT void comaps_force_redraw(void) {
     __android_log_print(ANDROID_LOG_DEBUG, "AgusMapsFlutterNative", "comaps_force_redraw - triggering full tile reload");
     if (g_framework) {
         // Step 1: Update map style - clears render groups and forces tile re-request
-        MapStyle currentStyle = g_framework->GetMapStyle();
+        MapStyle currentStyle = GetStyleReader().GetCurrentStyle();
         ApplyRuntimeMapStyle(currentStyle);
         
         // Step 2: InvalidateRendering posts high-priority message to force re-render

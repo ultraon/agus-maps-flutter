@@ -84,17 +84,18 @@ inline void SetMeasurementUnits(Framework * framework, int32_t unitsValue)
 inline int32_t GetAvoidRoutingOptions()
 {
   return static_cast<int32_t>(
-      routing::RoutingOptions::LoadCarOptionsFromSettings().GetOptions());
+      routing::RoutingOptions::LoadOptionsFromSettings(routing::VehicleType::Car).GetOptions());
 }
 
 inline void SetAvoidRoutingOptions(int32_t mask)
 {
-  auto const allowed = static_cast<int32_t>(routing::RoutingOptions::Road::Toll) |
-                       static_cast<int32_t>(routing::RoutingOptions::Road::Motorway) |
-                       static_cast<int32_t>(routing::RoutingOptions::Road::Ferry) |
-                       static_cast<int32_t>(routing::RoutingOptions::Road::Dirty);
-  routing::RoutingOptions::SaveCarOptionsToSettings(
-      routing::RoutingOptions(static_cast<routing::RoutingOptions::RoadType>(mask & allowed)));
+  auto const allowed = static_cast<int32_t>(routing::RoutingOptions::Option::Toll) |
+                       static_cast<int32_t>(routing::RoutingOptions::Option::Motorway) |
+                       static_cast<int32_t>(routing::RoutingOptions::Option::Ferry) |
+                       static_cast<int32_t>(routing::RoutingOptions::Option::Dirty);
+  routing::RoutingOptions::SaveOptionsToSettings(
+      routing::RoutingOptions(static_cast<routing::RoutingOptions::OptionType>(mask & allowed),
+                              routing::VehicleType::Car));
 }
 
 inline void EnsureRoutingCallbacks(Framework * framework)

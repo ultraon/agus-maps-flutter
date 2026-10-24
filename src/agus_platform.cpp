@@ -2,7 +2,7 @@
 #include "platform/locale.hpp"
 #include "platform/http_client.hpp"
 #include "platform/secure_storage.hpp"
-#include "platform/get_text_by_id.hpp"
+#include "i18n/get_text_by_id.hpp"
 #include "platform/constants.hpp"
 #include "platform/measurement_utils.hpp"
 #include "platform/settings.hpp"

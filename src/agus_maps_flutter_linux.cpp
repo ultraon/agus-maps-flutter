@@ -27,7 +27,7 @@
 #include "base/file_name_utils.hpp"
 #include "base/logging.hpp"
 #include "base/exception.hpp"
-#include "base/localisation.hpp"
+#include "i18n/localisation.hpp"
 #include "map/framework.hpp"
 #include "map/place_page_info.hpp"
 #include "indexer/map_style.hpp"
@@ -320,7 +320,7 @@ void SetOutdoorsEnabledInternal(bool enabled) {
     }
 
     g_outdoorsEnabled = enabled;
-    auto const currentStyle = g_framework->GetMapStyle();
+    auto const currentStyle = GetStyleReader().GetCurrentStyle();
     bool const dark = MapStyleIsDark(currentStyle);
 
     if (enabled) {
@@ -1062,7 +1062,7 @@ FFI_PLUGIN_EXPORT void comaps_set_map_theme(int dark) {
     if (!g_framework) {
         return;
     }
-    auto const currentStyle = g_framework->GetMapStyle();
+    auto const currentStyle = GetStyleReader().GetCurrentStyle();
     ApplyRuntimeMapStyle(dark != 0
         ? GetDarkMapStyleVariant(currentStyle)
         : GetLightMapStyleVariant(currentStyle));
@@ -1073,7 +1073,7 @@ FFI_PLUGIN_EXPORT int comaps_get_map_theme_is_dark(void) {
     if (!g_framework) {
         return 0;
     }
-    return MapStyleIsDark(g_framework->GetMapStyle()) ? 1 : 0;
+    return MapStyleIsDark(GetStyleReader().GetCurrentStyle()) ? 1 : 0;
 }
 
 FFI_PLUGIN_EXPORT void comaps_set_outdoors_enabled(int enabled) {
@@ -1254,7 +1254,7 @@ FFI_PLUGIN_EXPORT void comaps_invalidate(void) {
 FFI_PLUGIN_EXPORT void comaps_force_redraw(void) {
     if (g_framework) {
         // Force complete tile reload
-        ApplyRuntimeMapStyle(g_framework->GetMapStyle());
+        ApplyRuntimeMapStyle(GetStyleReader().GetCurrentStyle());
         g_framework->MakeFrameActive();
         g_framework->InvalidateRendering();
     }

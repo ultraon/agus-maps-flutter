@@ -280,7 +280,7 @@ FFI_PLUGIN_EXPORT void comaps_poi_results_free(AgusPoiResults* data);
 // Measurement units mirror measurement_utils::Units: 0=Metric, 1=Imperial.
 // Speed camera modes mirror routing::SpeedCameraManagerMode:
 // 0=Auto, 1=Always, 2=Never.
-// Avoid route options are a bitmask of routing::RoutingOptions::Road values:
+// Avoid route options are a bitmask of routing::RoutingOptions::Option values:
 // Toll=2, Motorway=4, Ferry=8, Dirty/unpaved=16.
 typedef struct {
 	int32_t is_active;
