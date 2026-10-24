@@ -1656,8 +1656,9 @@ int deregisterSingleMap(String fullPath) {
 /// Implemented on Android and iOS only. Call it on the main isolate.
 ///
 /// Returns null when no region contains the point (for example at sea).
-/// Throws a [StateError] when the framework is not initialized or the native
-/// read fails.
+/// Throws when the read fails: a [StateError] when the framework is not
+/// initialized or the native read fails, and an [ArgumentError] on a
+/// platform whose library lacks the symbol. Callers should catch any error.
 String? regionIdAt(double lat, double lon) {
   final resultPtr = _bindings.comaps_get_region_at_point(lat, lon);
   if (resultPtr == nullptr) {
