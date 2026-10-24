@@ -43,6 +43,7 @@ FFI_PLUGIN_EXPORT int sum_long_running(int a, int b) {
 #include "base/logging.hpp"
 #include "base/localisation.hpp"
 #include "map/framework.hpp"
+#include "storage/country_info_getter.hpp"
 #include "map/place_page_info.hpp"
 #include "indexer/feature_meta.hpp"
 #include "indexer/map_style.hpp"
@@ -2834,6 +2835,28 @@ FFI_PLUGIN_EXPORT int comaps_deregister_map(const char* fullPath) {
             "comaps_deregister_map: Exception: %s", e.what());
         return -2;
     }
+}
+
+FFI_PLUGIN_EXPORT char* comaps_get_region_at_point(double lat, double lon) {
+    if (!g_framework) {
+        __android_log_print(ANDROID_LOG_ERROR, "AgusMapsFlutterNative",
+            "comaps_get_region_at_point: Framework not initialized");
+        return nullptr;
+    }
+    try {
+        storage::CountryId const id = g_framework->GetCountryInfoGetter().GetRegionCountryId(
+            mercator::FromLatLon(lat, lon));
+        std::string const result = id == storage::kInvalidCountryId ? std::string() : id;
+        return strdup(result.c_str());
+    } catch (std::exception const & e) {
+        __android_log_print(ANDROID_LOG_ERROR, "AgusMapsFlutterNative",
+            "comaps_get_region_at_point: Exception: %s", e.what());
+        return nullptr;
+    }
+}
+
+FFI_PLUGIN_EXPORT void comaps_region_id_free(char* regionId) {
+    free(regionId);
 }
 
 // Debug function to list all registered MWMs and their bounds

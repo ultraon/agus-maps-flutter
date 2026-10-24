@@ -1269,6 +1269,45 @@ class AgusMapsFlutterBindings {
   late final _comaps_deregister_map = _comaps_deregister_mapPtr
       .asFunction<int Function(ffi.Pointer<ffi.Char>)>();
 
+  /// Returns the CoMaps region id (the country file name, for example
+  /// "Poland_Masovian Voivodeship") whose border polygon contains the point,
+  /// read from CountryInfoGetter::GetRegionCountryId. The result does not
+  /// depend on which maps are registered. Returns an empty string when no
+  /// region contains the point (for example at sea), and null when the
+  /// framework is not initialized or the read fails. Call
+  /// comaps_region_id_free when done. Implemented on Android and iOS only.
+  ffi.Pointer<ffi.Char> comaps_get_region_at_point(
+    double lat,
+    double lon,
+  ) {
+    return _comaps_get_region_at_point(
+      lat,
+      lon,
+    );
+  }
+
+  late final _comaps_get_region_at_pointPtr = _lookup<
+          ffi.NativeFunction<
+              ffi.Pointer<ffi.Char> Function(ffi.Double, ffi.Double)>>(
+      'comaps_get_region_at_point');
+  late final _comaps_get_region_at_point = _comaps_get_region_at_pointPtr
+      .asFunction<ffi.Pointer<ffi.Char> Function(double, double)>();
+
+  /// Frees a string returned by comaps_get_region_at_point.
+  void comaps_region_id_free(
+    ffi.Pointer<ffi.Char> regionId,
+  ) {
+    return _comaps_region_id_free(
+      regionId,
+    );
+  }
+
+  late final _comaps_region_id_freePtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function(ffi.Pointer<ffi.Char>)>>(
+          'comaps_region_id_free');
+  late final _comaps_region_id_free = _comaps_region_id_freePtr
+      .asFunction<void Function(ffi.Pointer<ffi.Char>)>();
+
   /// Get the count of registered maps
   int comaps_get_registered_maps_count() {
     return _comaps_get_registered_maps_count();

@@ -34,6 +34,7 @@
 #include "base/logging.hpp"
 #include "base/localisation.hpp"
 #include "map/framework.hpp"
+#include "storage/country_info_getter.hpp"
 #include "map/place_page_info.hpp"
 #include "indexer/feature_meta.hpp"
 #include "indexer/map_style.hpp"
@@ -2187,6 +2188,26 @@ FFI_PLUGIN_EXPORT int comaps_deregister_map(const char* fullPath) {
         NSLog(@"[AgusMapsFlutter] Exception deregistering map: %s", e.what());
         return -2;
     }
+}
+
+FFI_PLUGIN_EXPORT char* comaps_get_region_at_point(double lat, double lon) {
+    if (!g_framework) {
+        NSLog(@"[AgusMapsFlutter] comaps_get_region_at_point: Framework not initialized");
+        return nullptr;
+    }
+    try {
+        storage::CountryId const id = g_framework->GetCountryInfoGetter().GetRegionCountryId(
+            mercator::FromLatLon(lat, lon));
+        std::string const result = id == storage::kInvalidCountryId ? std::string() : id;
+        return strdup(result.c_str());
+    } catch (std::exception const & e) {
+        NSLog(@"[AgusMapsFlutter] comaps_get_region_at_point: Exception: %s", e.what());
+        return nullptr;
+    }
+}
+
+FFI_PLUGIN_EXPORT void comaps_region_id_free(char* regionId) {
+    free(regionId);
 }
 
 FFI_PLUGIN_EXPORT int comaps_get_registered_maps_count(void) {

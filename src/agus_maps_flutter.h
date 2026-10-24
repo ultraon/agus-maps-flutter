@@ -442,6 +442,18 @@ FFI_PLUGIN_EXPORT void comaps_debug_check_point(double lat, double lon);
 // the desktop shims keep their stubs.
 FFI_PLUGIN_EXPORT int comaps_deregister_map(const char* fullPath);
 
+// Returns the CoMaps region id (the country file name, for example
+// "Poland_Masovian Voivodeship") whose border polygon contains the point, read
+// from CountryInfoGetter::GetRegionCountryId. The result does not depend on
+// which maps are registered. Returns an empty string when no region contains
+// the point (for example at sea), and null when the framework is not
+// initialized or the read fails. Call comaps_region_id_free when done.
+// Implemented on Android and iOS only.
+FFI_PLUGIN_EXPORT char* comaps_get_region_at_point(double lat, double lon);
+
+// Frees a string returned by comaps_get_region_at_point.
+FFI_PLUGIN_EXPORT void comaps_region_id_free(char* regionId);
+
 // Get the count of registered maps
 FFI_PLUGIN_EXPORT int comaps_get_registered_maps_count(void);
 

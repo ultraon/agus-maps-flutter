@@ -1650,6 +1650,27 @@ int deregisterSingleMap(String fullPath) {
   }
 }
 
+/// Returns the CoMaps region id whose border polygon contains the point,
+/// for example `Poland_Masovian Voivodeship`. This is the file name of the
+/// map pack that covers the point, whether or not that pack is registered.
+/// Implemented on Android and iOS only. Call it on the main isolate.
+///
+/// Returns null when no region contains the point (for example at sea).
+/// Throws a [StateError] when the framework is not initialized or the native
+/// read fails.
+String? regionIdAt(double lat, double lon) {
+  final resultPtr = _bindings.comaps_get_region_at_point(lat, lon);
+  if (resultPtr == nullptr) {
+    throw StateError('comaps_get_region_at_point failed');
+  }
+  try {
+    final regionId = resultPtr.cast<Utf8>().toDartString();
+    return regionId.isEmpty ? null : regionId;
+  } finally {
+    _bindings.comaps_region_id_free(resultPtr);
+  }
+}
+
 /// Debug: List all registered MWMs and their bounds.
 /// Output goes to Android logcat (tag: AgusMapsFlutterNative).
 void debugListMwms() {
