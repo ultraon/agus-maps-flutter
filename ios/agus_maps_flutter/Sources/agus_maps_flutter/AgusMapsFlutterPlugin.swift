@@ -235,14 +235,17 @@ public class AgusMapsFlutterPlugin: NSObject, FlutterPlugin, FlutterTexture, Agu
         let fileName = (assetPath as NSString).lastPathComponent
         let destPath = documentsDir.appendingPathComponent(fileName)
         
-        // Check if already extracted
+        let marker = ExtractedDataMarker(documentsDir: documentsDir, bundledCountriesPath: bundledCountriesPath())
         if FileManager.default.fileExists(atPath: destPath.path) {
-            NSLog("[AgusMapsFlutter] Map already exists at: %@", destPath.path)
-            return destPath.path
+            if marker.isExtractedDataCurrent() {
+                NSLog("[AgusMapsFlutter] Map already exists at: %@", destPath.path)
+                return destPath.path
+            }
+            NSLog("[AgusMapsFlutter] Replacing %@: extracted data version %@, bundled %@",
+                  fileName, marker.extractedVersion() ?? "none", marker.bundledVersion ?? "unknown")
         }
         
-        // Copy file
-        try FileManager.default.copyItem(atPath: bundlePath, toPath: destPath.path)
+        try ExtractedDataMarker.copyReplacing(source: bundlePath, target: destPath)
         
         // Disable iCloud backup for map files
         var url = destPath
@@ -296,7 +299,7 @@ public class AgusMapsFlutterPlugin: NSObject, FlutterPlugin, FlutterTexture, Agu
         NSLog("[AgusMapsFlutter] Extracting CoMaps data files...")
         
         let documentsDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let markerFile = documentsDir.appendingPathComponent(".comaps_data_extracted")
+        let markerFile = documentsDir.appendingPathComponent(ExtractedDataMarker.markerName)
         
         // Essential files that must exist for CoMaps to work
         let essentialFiles = [
@@ -314,8 +317,15 @@ public class AgusMapsFlutterPlugin: NSObject, FlutterPlugin, FlutterTexture, Agu
             "localized_types/en.lproj/LocalizableTypes.strings"  // Localized POI type names
         ]
         
+        let marker = ExtractedDataMarker(documentsDir: documentsDir, bundledCountriesPath: bundledCountriesPath())
+        
         // Check if already extracted AND essential files exist
         var needsExtraction = !FileManager.default.fileExists(atPath: markerFile.path)
+        if !needsExtraction && !marker.isExtractedDataCurrent() {
+            NSLog("[AgusMapsFlutter] Engine data version changed: extracted %@, bundled %@, extracting again",
+                  marker.extractedVersion() ?? "none", marker.bundledVersion ?? "unknown")
+            needsExtraction = true
+        }
         if !needsExtraction {
             // Verify essential files exist
             for file in essentialFiles {
@@ -340,12 +350,16 @@ public class AgusMapsFlutterPlugin: NSObject, FlutterPlugin, FlutterTexture, Agu
             return documentsDir.path
         }
         
+        // Without a marker, an interrupted extraction runs again on the next start.
+        try? FileManager.default.removeItem(atPath: markerFile.path)
+        
         // Extract data files from bundle's comaps_data directory
         let dataAssetPath = lookupKeyForAsset("assets/comaps_data")
         if let bundleDataPath = Bundle.main.resourcePath?.appending("/\(dataAssetPath)"),
            FileManager.default.fileExists(atPath: bundleDataPath) {
             NSLog("[AgusMapsFlutter] Extracting from bundle path: %@", bundleDataPath)
             try extractDirectory(from: bundleDataPath, to: documentsDir.path)
+            try marker.writeMarker()
         } else {
             NSLog("[AgusMapsFlutter] WARNING: Bundle data path not found!")
         }
@@ -360,11 +374,12 @@ public class AgusMapsFlutterPlugin: NSObject, FlutterPlugin, FlutterTexture, Agu
             }
         }
         
-        // Create marker file
-        FileManager.default.createFile(atPath: markerFile.path, contents: nil, attributes: nil)
-        
         NSLog("[AgusMapsFlutter] Data files extracted to: %@", documentsDir.path)
         return documentsDir.path
+    }
+    
+    private func bundledCountriesPath() -> String? {
+        return Bundle.main.path(forResource: lookupKeyForAsset("assets/comaps_data/countries.txt"), ofType: nil)
     }
     
     private func extractDirectory(from sourcePath: String, to destPath: String) throws {

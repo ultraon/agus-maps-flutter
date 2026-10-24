@@ -386,27 +386,33 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
         });
     }
 
+  private ExtractedDataMarker dataMarker;
+
+  private synchronized ExtractedDataMarker getDataMarker() {
+    if (dataMarker == null) {
+      dataMarker = new ExtractedDataMarker(context.getAssets(), context.getFilesDir());
+    }
+    return dataMarker;
+  }
+
   private String extractMap(String assetPath) throws IOException {
     android.util.Log.d("AgusMapsFlutter", "Extracting asset: " + assetPath);
     String fullAssetPath = io.flutter.FlutterInjector.instance().flutterLoader().getLookupKeyForAsset(assetPath);
     
     File filesDir = context.getFilesDir();
     File outFile = new File(filesDir, new File(assetPath).getName());
+    ExtractedDataMarker marker = getDataMarker();
     
-    if (outFile.exists()) {
+    if (outFile.exists() && marker.isExtractedDataCurrent()) {
         android.util.Log.d("AgusMapsFlutter", "Map already exists at: " + outFile.getAbsolutePath());
         return outFile.getAbsolutePath();
     }
-
-    AssetManager assetManager = context.getAssets();
-    try (InputStream in = assetManager.open(fullAssetPath);
-         OutputStream out = new FileOutputStream(outFile)) {
-        byte[] buffer = new byte[32 * 1024]; // 32KB buffer
-        int read;
-        while ((read = in.read(buffer)) != -1) {
-            out.write(buffer, 0, read);
-        }
+    if (outFile.exists()) {
+        android.util.Log.i("AgusMapsFlutter", "Replacing " + outFile.getName() + ": extracted data version "
+                + marker.getExtractedVersion() + ", bundled " + marker.getBundledVersion());
     }
+
+    marker.copyAssetReplacing(fullAssetPath, outFile);
     android.util.Log.d("AgusMapsFlutter", "Map extracted to: " + outFile.getAbsolutePath());
     return outFile.getAbsolutePath();
   }
@@ -419,7 +425,7 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
     File filesDir = context.getFilesDir();
     
     // Check if data is already extracted by looking for a marker file
-    File markerFile = new File(filesDir, ".comaps_data_extracted");
+    File markerFile = new File(filesDir, ExtractedDataMarker.MARKER_NAME);
     File fontsDir = new File(filesDir, "fonts");
     File unicodeBlockFile = new File(fontsDir, "unicode_blocks.txt");
     File localizedTypesFile = new File(filesDir, "localized_types/en.lproj/LocalizableTypes.strings");
@@ -437,10 +443,18 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
             darkSymbolsSdf.exists() && darkSymbolsSdf.length() >= 1_000L;
     
     // Check if data is already extracted AND essential files exist
-    if (markerFile.exists() && unicodeBlockFile.exists() && localizedTypesFile.exists() && categoriesBrandsFile.exists() && soundStringsFile.exists() && symbolsReady) {
+    ExtractedDataMarker marker = getDataMarker();
+    boolean dataCurrent = marker.isExtractedDataCurrent();
+    if (dataCurrent && markerFile.exists() && unicodeBlockFile.exists() && localizedTypesFile.exists() && categoriesBrandsFile.exists() && soundStringsFile.exists() && symbolsReady) {
         android.util.Log.d("AgusMapsFlutter", "Data already extracted at: " + filesDir.getAbsolutePath());
         return filesDir.getAbsolutePath();
     }
+    if (!dataCurrent && markerFile.exists()) {
+        android.util.Log.i("AgusMapsFlutter", "Engine data version changed: extracted "
+                + marker.getExtractedVersion() + ", bundled " + marker.getBundledVersion() + ", extracting again");
+    }
+    // Without a marker, an interrupted extraction runs again on the next start.
+    marker.deleteMarker();
     
     AssetManager assetManager = context.getAssets();
     String assetPrefix = io.flutter.FlutterInjector.instance().flutterLoader().getLookupKeyForAsset("assets/comaps_data");
@@ -448,8 +462,7 @@ public class AgusMapsFlutterPlugin implements FlutterPlugin, AgusMapsApi.AgusMap
     // Extract all files from assets/comaps_data directly to files directory
     extractAssetsRecursive(assetManager, assetPrefix, filesDir);
     
-    // Create marker file
-    markerFile.createNewFile();
+    marker.writeMarker();
     
     android.util.Log.d("AgusMapsFlutter", "Data extracted to: " + filesDir.getAbsolutePath());
     return filesDir.getAbsolutePath();
