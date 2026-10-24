@@ -1540,3 +1540,24 @@ Since CoMaps `v2026.10.05-19` the translation sources live in `data/translations
 **Without this patch:**
 - On macOS, `data/countries-strings/default.json/` is missing from the generated data and from `example/assets/comaps_data`.
 - An app whose `pubspec.yaml` lists `assets/comaps_data/countries-strings/default.json/` fails to build.
+
+
+### 0077-libs-indexer-map-style-reader-keep-loaded-styles.patch
+
+**File Modified:** `libs/indexer/map_style_reader.cpp`
+
+**Category:** Rendering Stability
+
+**Purpose:** Stops a map style change from clearing a classificator that tile reader threads still use.
+
+**What it does:**
+- `StyleReader::SetCurrentStyle` loads the classificator and the drawing rules of a style only the first time that style is used.
+- It no longer calls `classificator::Cleanup()`, so the data of the previous style stays in memory.
+
+**Why it's needed:**
+CoMaps keeps one classificator and one set of drawing rules per map style. Since `v2026.10.05-19`, `SetCurrentStyle` loads the new style and then clears all other styles. A tile reader task that started before the change can still read the old style. When its data is cleared, `ClassifObject::GetObject` returns `nullptr` and the reader crashes in `ClassifObject::GetSuitable`. A call with the style already in use also cleared and reloaded the live classificator.
+
+**Cost:** each style that the app used stays loaded. The app uses at most the light and dark variants of the default and outdoors styles.
+
+**Without this patch:**
+- A switch between the light and dark map theme, or outdoors on or off, while tiles load can crash the app with SIGSEGV.
