@@ -908,7 +908,11 @@ void ApplyRuntimeMapStyle(MapStyle mapStyle) {
     if (!g_framework || mapStyle == MapStyleMerged) {
         return;
     }
-    GetStyleReader().SetCurrentStyle(mapStyle);
+    // SetCurrentStyle reloads the classificator of the given style. For the style in use, the
+    // tile reader threads read that classificator at the same time and crash on the empty table.
+    if (GetStyleReader().GetCurrentStyle() != mapStyle) {
+        GetStyleReader().SetCurrentStyle(mapStyle);
+    }
     if (auto engine = g_framework->GetDrapeEngine()) {
         engine->UpdateMapStyle();
     }
