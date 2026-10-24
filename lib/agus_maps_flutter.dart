@@ -878,10 +878,11 @@ class NativePoiDetailsException implements Exception {
   String toString() => 'NativePoiDetailsException(status: $status)';
 }
 
-/// Reads the facts that the map has about one place: the feature of the
-/// classificator [typePaths] within a few meters of ([lat], [lon]),
-/// preferring the one named [name]. An empty [name] or [typePaths] widens
-/// the match to any name or any type.
+/// Reads the facts that the map has about one place: the nearest feature of
+/// the classificator [typePaths] within 15 m of ([lat], [lon]) whose name
+/// equals [name]. An empty [name] matches any name and empty [typePaths]
+/// any type; paths of which none is known throw status -3. The address is
+/// only the feature's own exact address.
 ///
 /// The keys are `opening_hours` (the raw OSM value), `cuisine`, `address`,
 /// `phone`, `website`, `email`, `wheelchair` (`yes`, `limited` or `no`),
@@ -897,15 +898,18 @@ Map<String, String> readNativePoiDetails(
   String name,
   List<String> typePaths,
 ) {
-  final namePtr = name.toNativeUtf8().cast<Char>();
-  final pathPtrs = malloc<Pointer<Char>>(
-    typePaths.isEmpty ? 1 : typePaths.length,
-  );
-  for (var i = 0; i < typePaths.length; i++) {
-    pathPtrs[i] = typePaths[i].toNativeUtf8().cast<Char>();
-  }
+  Pointer<Char> namePtr = nullptr;
+  Pointer<Pointer<Char>> pathPtrs = nullptr;
+  var pathCount = 0;
   Pointer<AgusPoiDetails> detailsPtr = nullptr;
   try {
+    namePtr = name.toNativeUtf8().cast<Char>();
+    pathPtrs = calloc<Pointer<Char>>(
+      typePaths.isEmpty ? 1 : typePaths.length,
+    );
+    for (; pathCount < typePaths.length; pathCount++) {
+      pathPtrs[pathCount] = typePaths[pathCount].toNativeUtf8().cast<Char>();
+    }
     detailsPtr = _bindings.comaps_get_poi_details(
       lat,
       lon,
@@ -932,11 +936,13 @@ Map<String, String> readNativePoiDetails(
     if (detailsPtr != nullptr) {
       _bindings.comaps_poi_details_free(detailsPtr);
     }
-    for (var i = 0; i < typePaths.length; i++) {
-      malloc.free(pathPtrs[i]);
+    if (pathPtrs != nullptr) {
+      for (var i = 0; i < pathCount; i++) {
+        malloc.free(pathPtrs[i]);
+      }
+      calloc.free(pathPtrs);
     }
-    malloc.free(pathPtrs);
-    malloc.free(namePtr);
+    if (namePtr != nullptr) malloc.free(namePtr);
   }
 }
 

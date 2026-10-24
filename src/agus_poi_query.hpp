@@ -374,20 +374,18 @@ std::string WheelchairOf(FeatureType & feature)
   return value;
 }
 
-std::string AddressOf(Framework & framework, FeatureType & feature)
+// Only the address of the feature itself: an address found near the point
+// can belong to a neighbouring building.
+std::string AddressOf(DataSource const & dataSource, FeatureType & feature)
 {
-  search::ReverseGeocoder const coder(framework.GetDataSource());
+  search::ReverseGeocoder const coder(dataSource);
   search::ReverseGeocoder::Address address;
-  if (coder.GetExactAddress(feature, address))
-  {
-    std::string text = address.FormatAddress();
-    if (!text.empty())
-      return text;
-  }
-  return framework.GetAddressAtPoint(feature::GetCenter(feature)).FormatAddress();
+  if (!coder.GetExactAddress(feature, address))
+    return {};
+  return address.FormatAddress();
 }
 
-std::vector<DetailRow> DetailsOf(Framework & framework, FeatureType & feature)
+std::vector<DetailRow> DetailsOf(DataSource const & dataSource, FeatureType & feature)
 {
   std::vector<DetailRow> rows;
   auto const add = [&rows](char const * key, std::string value)
@@ -400,7 +398,7 @@ std::vector<DetailRow> DetailsOf(Framework & framework, FeatureType & feature)
 
   add("opening_hours", meta(feature::Metadata::FMD_OPEN_HOURS));
   add("cuisine", CuisineOf(feature));
-  add("address", AddressOf(framework, feature));
+  add("address", AddressOf(dataSource, feature));
   add("phone", meta(feature::Metadata::FMD_PHONE_NUMBER));
   add("website", meta(feature::Metadata::FMD_WEBSITE));
   add("email", meta(feature::Metadata::FMD_EMAIL));
@@ -416,16 +414,7 @@ std::vector<DetailRow> DetailsOf(Framework & framework, FeatureType & feature)
 struct DetailsMatch
 {
   FeatureID id;
-  bool nameMatches = false;
   double distanceMeters = std::numeric_limits<double>::max();
-
-  // A name match wins over distance; among equals the nearer one wins.
-  bool IsBetterThan(DetailsMatch const & other) const
-  {
-    if (nameMatches != other.nameMatches)
-      return nameMatches;
-    return distanceMeters < other.distanceMeters;
-  }
 };
 }  // namespace
 
@@ -440,6 +429,8 @@ static inline AgusPoiDetails * GetPoiDetails(Framework * framework, double lat, 
   try
   {
     auto const types = typeCount > 0 ? ResolveTypes(typePaths, typeCount) : std::vector<RequestedType>{};
+    if (typeCount > 0 && types.empty())
+      return NewPoiDetails(kBadArguments);
     std::string const wantedName = name ? name : "";
     m2::PointD const centre = mercator::FromLatLon(lat, lon);
     m2::RectD const rect = mercator::RectByCenterXYAndSizeInMeters(centre, kDetailsMatchMeters);
@@ -452,9 +443,12 @@ static inline AgusPoiDetails * GetPoiDetails(Framework * framework, double lat, 
       double const distance = mercator::DistanceOnEarth(centre, feature::GetCenter(feature));
       if (distance > kDetailsMatchMeters)
         return;
-      DetailsMatch candidate{feature.GetID(), !wantedName.empty() && NameOf(feature) == wantedName, distance};
-      if (candidate.IsBetterThan(best))
-        best = candidate;
+      // With a wanted name only that name matches, so a neighbour of the
+      // same type never lends its facts to the place.
+      if (!wantedName.empty() && NameOf(feature) != wantedName)
+        return;
+      if (distance < best.distanceMeters)
+        best = {feature.GetID(), distance};
     }, rect, scales::GetUpperScale());
 
     if (!best.id.IsValid())
@@ -466,7 +460,7 @@ static inline AgusPoiDetails * GetPoiDetails(Framework * framework, double lat, 
     auto feature = guard.GetFeatureByIndex(best.id.m_index);
     if (!feature)
       return NewPoiDetails(kDetailsNotFound);
-    return CopyDetails(DetailsOf(*framework, *feature));
+    return CopyDetails(DetailsOf(framework->GetDataSource(), *feature));
   }
   catch (std::exception const & e)
   {

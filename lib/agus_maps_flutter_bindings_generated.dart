@@ -698,12 +698,13 @@ class AgusMapsFlutterBindings {
   late final _comaps_poi_results_free = _comaps_poi_results_freePtr
       .asFunction<void Function(ffi.Pointer<AgusPoiResults>)>();
 
-  /// Reads the facts of one place: the feature of the given classificator
-  /// types (as for comaps_query_pois) within a few meters of (lat, lon),
-  /// preferring the one whose name equals name. An empty name or no type
-  /// paths widen the match to any name or any type. It does not move the
-  /// camera or touch the search state, so a background thread may call it.
-  /// Call comaps_poi_details_free when done.
+  /// Reads the facts of one place: the nearest feature of the given
+  /// classificator types (as for comaps_query_pois) within 15 m of (lat, lon)
+  /// whose name equals name. An empty name matches any name; no type paths
+  /// match any type, but type paths of which none is known give status -3.
+  /// The address is only the feature's own exact address. It does not move
+  /// the camera or touch the search state, so a background thread may call
+  /// it. Call comaps_poi_details_free when done.
   ffi.Pointer<AgusPoiDetails> comaps_get_poi_details(
     double lat,
     double lon,
