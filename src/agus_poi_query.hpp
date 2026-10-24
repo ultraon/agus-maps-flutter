@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agus_maps_flutter.h"
+#include "agus_open_hours.hpp"
 
 #include "map/framework.hpp"
 
@@ -21,8 +22,6 @@
 #include "geometry/mercator.hpp"
 
 #include "base/logging.hpp"
-
-#include "3party/opening_hours/opening_hours.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -57,24 +56,7 @@ struct RequestedType
   int32_t index;
 };
 
-// Mirrors the open_state values of AgusPoiResult.
-enum PoiOpenState : int32_t
-{
-  kOpenUnknown = 0,
-  kOpenNow = 1,
-  kClosedNow = 2,
-  kOpenAlways = 3,
-};
-
-// A next change further away than this counts as none: the opening hours
-// evaluation looks one week ahead.
-constexpr time_t kOpenStateHorizonSeconds = 7 * 24 * 60 * 60;
-
-struct OpenStatus
-{
-  int32_t state = kOpenUnknown;
-  int64_t nextChangeSeconds = 0;
-};
+using agus_open_hours::OpenStatus;
 
 struct PoiRow
 {
@@ -155,36 +137,10 @@ std::string NameOf(FeatureType & feature)
   return std::string(feature.GetName(localisation::kDefaultNameIndex));
 }
 
-// The open state of the OSM opening_hours value at the device local time,
-// with the next open or close change. Known limitation: the evaluation uses
-// the device time zone, not the time zone of the place, like the CoMaps
-// place page. Only a true 24/7 rule reads as always open.
 OpenStatus OpenStatusOf(FeatureType & feature, time_t now)
 {
-  OpenStatus status;
-  std::string const hours(feature.GetMetadata(feature::Metadata::FMD_OPEN_HOURS));
-  if (hours.empty())
-    return status;
-  osmoh::OpeningHours const openingHours(hours);
-  if (!openingHours.IsValid())
-    return status;
-  if (openingHours.IsTwentyFourHours())
-  {
-    status.state = kOpenAlways;
-    return status;
-  }
-
-  auto const info = openingHours.GetInfo(now);
-  if (info.state == osmoh::RuleState::Unknown)
-    return status;
-  bool const open = info.state == osmoh::RuleState::Open;
-  time_t const next = open ? info.nextTimeClosed : info.nextTimeOpen;
-  bool const hasNext = next != std::numeric_limits<time_t>::max() && next > now &&
-                       next - now < kOpenStateHorizonSeconds;
-  status.state = open ? kOpenNow : kClosedNow;
-  if (hasNext)
-    status.nextChangeSeconds = static_cast<int64_t>(next);
-  return status;
+  return agus_open_hours::OpenStatusOfHours(
+      std::string(feature.GetMetadata(feature::Metadata::FMD_OPEN_HOURS)), now);
 }
 
 // The classificator cuisine name in plain English: "thai" reads "Thai".
