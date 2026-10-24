@@ -1,8 +1,16 @@
 diff --git a/libs/drape/vertex_array_buffer.cpp b/libs/drape/vertex_array_buffer.cpp
-index 913f0fb..c41e5c8 100644
+index 1dfd71986..0e5eecedc 100644
 --- a/libs/drape/vertex_array_buffer.cpp
 +++ b/libs/drape/vertex_array_buffer.cpp
-@@ -84,7 +84,13 @@ public:
+@@ -10,6 +10,7 @@
+ #include "drape/index_storage.hpp"
+ 
+ #include "base/assert.hpp"
++#include "base/logging.hpp"
+ #include "base/macros.hpp"
+ 
+ #include "std/target_os.hpp"
+@@ -87,7 +88,13 @@ public:
        {
          BindingDecl const & decl = binding.GetBindingDecl(i);
          int8_t attributeLocation = m_program->GetAttributeLocation(decl.m_attributeName);
