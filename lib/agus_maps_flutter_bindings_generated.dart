@@ -2168,6 +2168,11 @@ final class AgusSearchResults extends ffi.Struct {
 
 /// One feature found by comaps_query_pois. type_index is the position of the
 /// matching path in the request. name is empty when the feature has none.
+/// open_state comes from the OSM opening_hours at the device local time:
+/// 0=unknown or no hours, 1=open, 2=closed, 3=open 24/7.
+/// next_change_seconds is the Unix time of the next close (when open) or the
+/// next open (when closed), or 0 when none is known within one week.
+/// cuisine is the cuisines in English joined with ", ", or empty.
 final class AgusPoiResult extends ffi.Struct {
   external ffi.Pointer<ffi.Char> name;
 
@@ -2182,6 +2187,14 @@ final class AgusPoiResult extends ffi.Struct {
 
   @ffi.Double()
   external double distance_meters;
+
+  @ffi.Int32()
+  external int open_state;
+
+  @ffi.Int64()
+  external int next_change_seconds;
+
+  external ffi.Pointer<ffi.Char> cuisine;
 }
 
 /// Status values: 0=ok, -1=framework not ready, -2=query failed,

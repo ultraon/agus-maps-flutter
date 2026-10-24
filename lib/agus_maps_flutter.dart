@@ -721,6 +721,27 @@ void cancelNativeSearch() {
   }
 }
 
+/// The open state of a [NativePoi] from its OSM `opening_hours`, at the
+/// device local time of the query.
+enum NativePoiOpenState {
+  /// The place has no opening hours, or the engine cannot read them.
+  unknown,
+  open,
+  closed,
+
+  /// Open 24/7, or open with no close in the next week.
+  alwaysOpen;
+
+  /// The state for the native `open_state` value. An unknown value reads
+  /// [unknown].
+  static NativePoiOpenState fromNative(int value) => switch (value) {
+        1 => open,
+        2 => closed,
+        3 => alwaysOpen,
+        _ => unknown,
+      };
+}
+
 /// One feature found by [queryNativePois].
 class NativePoi {
   const NativePoi({
@@ -729,6 +750,9 @@ class NativePoi {
     required this.lat,
     required this.lon,
     required this.distanceMeters,
+    this.openState = NativePoiOpenState.unknown,
+    this.nextChange,
+    this.cuisine = '',
   });
 
   /// The feature name, or an empty string when it has none.
@@ -741,6 +765,16 @@ class NativePoi {
 
   /// The straight-line distance from the query centre.
   final double distanceMeters;
+
+  final NativePoiOpenState openState;
+
+  /// When [openState] next changes: the close time of an open place, the
+  /// open time of a closed one. Null when no change is known within a week.
+  final DateTime? nextChange;
+
+  /// The cuisines in English joined with ", ", for example "Pizza, Italian",
+  /// or an empty string.
+  final String cuisine;
 }
 
 /// Thrown by [queryNativePois] when the native query reports an error.
@@ -803,6 +837,13 @@ List<NativePoi> queryNativePois(
           lat: row.lat,
           lon: row.lon,
           distanceMeters: row.distance_meters,
+          openState: NativePoiOpenState.fromNative(row.open_state),
+          nextChange: row.next_change_seconds > 0
+              ? DateTime.fromMillisecondsSinceEpoch(
+                  row.next_change_seconds * 1000,
+                )
+              : null,
+          cuisine: _nativeSearchString(row.cuisine),
         ),
       );
     }
@@ -2030,7 +2071,8 @@ void setVisibleViewport(double left, double top, double right, double bottom) {
 
 /// Move [lat], [lon] to the centre of the visible viewport and zoom by
 /// [factor] (>1 zooms in) in one camera move. The follow modes stay on.
-void scaleAndCenter(double lat, double lon, double factor, {bool animated = true}) {
+void scaleAndCenter(double lat, double lon, double factor,
+    {bool animated = true}) {
   _bindings.comaps_scale_and_center(lat, lon, factor, animated ? 1 : 0);
 }
 

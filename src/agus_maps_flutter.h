@@ -241,12 +241,20 @@ FFI_PLUGIN_EXPORT void comaps_search_cancel(void);
 
 // One feature found by comaps_query_pois. type_index is the position of the
 // matching path in the request. name is empty when the feature has none.
+// open_state comes from the OSM opening_hours at the device local time:
+// 0=unknown or no hours, 1=open, 2=closed, 3=open 24/7.
+// next_change_seconds is the Unix time of the next close (when open) or the
+// next open (when closed), or 0 when none is known within one week.
+// cuisine is the cuisines in English joined with ", ", or empty.
 typedef struct {
 	const char* name;
 	int32_t type_index;
 	double lat;
 	double lon;
 	double distance_meters;
+	int32_t open_state;
+	int64_t next_change_seconds;
+	const char* cuisine;
 } AgusPoiResult;
 
 // Status values: 0=ok, -1=framework not ready, -2=query failed,

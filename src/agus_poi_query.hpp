@@ -7,16 +7,24 @@
 #include "indexer/classificator.hpp"
 #include "indexer/feature.hpp"
 #include "indexer/feature_algo.hpp"
+#include "indexer/feature_data.hpp"
+#include "indexer/feature_meta.hpp"
+#include "indexer/feature_utils.hpp"
 #include "indexer/scales.hpp"
 
 #include "geometry/mercator.hpp"
 
 #include "base/logging.hpp"
 
+#include "3party/opening_hours/opening_hours.hpp"
+
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <exception>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -42,6 +50,25 @@ struct RequestedType
   int32_t index;
 };
 
+// Mirrors the open_state values of AgusPoiResult.
+enum PoiOpenState : int32_t
+{
+  kOpenUnknown = 0,
+  kOpenNow = 1,
+  kClosedNow = 2,
+  kOpenAlways = 3,
+};
+
+// A next change further away than this counts as none, as in the CoMaps
+// place page: the opening hours evaluation looks one week ahead.
+constexpr time_t kOpenStateHorizonSeconds = 7 * 24 * 60 * 60;
+
+struct OpenStatus
+{
+  int32_t state = kOpenUnknown;
+  int64_t nextChangeSeconds = 0;
+};
+
 struct PoiRow
 {
   std::string name;
@@ -49,6 +76,8 @@ struct PoiRow
   double lat;
   double lon;
   double distanceMeters;
+  OpenStatus open;
+  std::string cuisine;
 };
 
 char * CopyPoiCString(std::string const & value)
@@ -119,6 +148,69 @@ std::string NameOf(FeatureType & feature)
   return std::string(feature.GetName(localisation::kDefaultNameIndex));
 }
 
+// The open state of the OSM opening_hours value at the device local time,
+// with the next open or close change. The evaluation uses the device time
+// zone, like the CoMaps place page.
+OpenStatus OpenStatusOf(FeatureType & feature, time_t now)
+{
+  OpenStatus status;
+  std::string const hours(feature.GetMetadata(feature::Metadata::FMD_OPEN_HOURS));
+  if (hours.empty())
+    return status;
+  osmoh::OpeningHours const openingHours(hours);
+  if (!openingHours.IsValid())
+    return status;
+  if (openingHours.IsTwentyFourHours())
+  {
+    status.state = kOpenAlways;
+    return status;
+  }
+
+  auto const info = openingHours.GetInfo(now);
+  if (info.state == osmoh::RuleState::Unknown)
+    return status;
+  bool const open = info.state == osmoh::RuleState::Open;
+  time_t const next = open ? info.nextTimeClosed : info.nextTimeOpen;
+  bool const hasNext = next != std::numeric_limits<time_t>::max() && next > now &&
+                       next - now < kOpenStateHorizonSeconds;
+  if (open && !hasNext)
+  {
+    status.state = kOpenAlways;
+    return status;
+  }
+  status.state = open ? kOpenNow : kClosedNow;
+  if (hasNext)
+    status.nextChangeSeconds = static_cast<int64_t>(next);
+  return status;
+}
+
+// The classificator cuisine name in plain English: "fish_and_chips" reads
+// "Fish and chips". The app shows English only, so the device language of
+// the CoMaps translations does not apply here.
+std::string ReadableCuisine(std::string raw)
+{
+  std::replace(raw.begin(), raw.end(), '_', ' ');
+  if (!raw.empty())
+    raw[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(raw[0])));
+  return raw;
+}
+
+// The cuisines of the feature joined with ", ", for example "Pizza, Italian",
+// or an empty string.
+std::string CuisineOf(FeatureType & feature)
+{
+  std::string out;
+  for (auto const & raw : feature::GetCuisines(feature::TypesHolder(feature)))
+  {
+    if (raw.empty())
+      continue;
+    if (!out.empty())
+      out += ", ";
+    out += ReadableCuisine(raw);
+  }
+  return out;
+}
+
 AgusPoiResults * CopyRows(std::vector<PoiRow> const & rows)
 {
   auto * results = NewPoiResults(kOk);
@@ -142,6 +234,9 @@ AgusPoiResults * CopyRows(std::vector<PoiRow> const & rows)
     out.lat = row.lat;
     out.lon = row.lon;
     out.distance_meters = row.distanceMeters;
+    out.open_state = row.open.state;
+    out.next_change_seconds = row.open.nextChangeSeconds;
+    out.cuisine = CopyPoiCString(row.cuisine);
   }
   return results;
 }
@@ -164,6 +259,7 @@ static inline AgusPoiResults * QueryPois(Framework * framework, double lat, doub
     m2::PointD const centre = mercator::FromLatLon(lat, lon);
     m2::RectD const rect = mercator::RectByCenterXYAndSizeInMeters(centre, radiusMeters);
 
+    time_t const now = std::time(nullptr);
     std::vector<PoiRow> rows;
     framework->GetDataSource().ForEachInRect([&](FeatureType & feature)
     {
@@ -175,7 +271,8 @@ static inline AgusPoiResults * QueryPois(Framework * framework, double lat, doub
       if (distance > radiusMeters)
         return;
       auto const latLon = mercator::ToLatLon(point);
-      rows.push_back({NameOf(feature), typeIndex, latLon.m_lat, latLon.m_lon, distance});
+      rows.push_back({NameOf(feature), typeIndex, latLon.m_lat, latLon.m_lon, distance,
+                      OpenStatusOf(feature, now), CuisineOf(feature)});
     }, rect, scales::GetUpperScale());
 
     std::sort(rows.begin(), rows.end(),
@@ -204,7 +301,10 @@ static inline void FreePoiResults(AgusPoiResults * data)
   if (data->results)
   {
     for (int32_t i = 0; i < data->result_count; ++i)
+    {
       std::free(const_cast<char *>(data->results[i].name));
+      std::free(const_cast<char *>(data->results[i].cuisine));
+    }
     std::free(data->results);
   }
 
