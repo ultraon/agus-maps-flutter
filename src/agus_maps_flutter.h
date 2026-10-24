@@ -282,6 +282,40 @@ FFI_PLUGIN_EXPORT AgusPoiResults* comaps_query_pois(
 // Frees a result allocated by comaps_query_pois.
 FFI_PLUGIN_EXPORT void comaps_poi_results_free(AgusPoiResults* data);
 
+// One fact about a place found by comaps_get_poi_details. key is one of
+// "opening_hours" (the raw OSM value), "cuisine" (English, joined with
+// ", "), "address", "phone", "website", "email", "wheelchair" ("yes",
+// "limited" or "no"), "internet_access", "outdoor_seating", "operator",
+// "brand" or "description". Only facts with a value are listed.
+typedef struct {
+	const char* key;
+	const char* value;
+} AgusPoiDetail;
+
+// Status values: 0=ok, -1=framework not ready, -2=read failed,
+// -3=bad arguments, -4=no matching place near the position.
+typedef struct {
+	int32_t status;
+	int32_t detail_count;
+	AgusPoiDetail* details;
+} AgusPoiDetails;
+
+// Reads the facts of one place: the feature of the given classificator
+// types (as for comaps_query_pois) within a few meters of (lat, lon),
+// preferring the one whose name equals name. An empty name or no type
+// paths widen the match to any name or any type. It does not move the
+// camera or touch the search state, so a background thread may call it.
+// Call comaps_poi_details_free when done.
+FFI_PLUGIN_EXPORT AgusPoiDetails* comaps_get_poi_details(
+	double lat,
+	double lon,
+	const char* name,
+	const char** type_paths,
+	int32_t type_count);
+
+// Frees a result allocated by comaps_get_poi_details.
+FFI_PLUGIN_EXPORT void comaps_poi_details_free(AgusPoiDetails* data);
+
 // Navigation route point types mirrored from RouteMarkType:
 // 0=Start, 1=Intermediate, 2=Finish.
 // Router types mirror routing::RouterType: 0=Vehicle, 1=Pedestrian,

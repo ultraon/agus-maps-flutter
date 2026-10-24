@@ -865,6 +865,81 @@ List<NativePoi> queryNativePois(
   }
 }
 
+/// Thrown by [readNativePoiDetails] when the native read reports an error.
+class NativePoiDetailsException implements Exception {
+  const NativePoiDetailsException(this.status);
+
+  /// The native status: -1 framework not ready, -2 read failed, -3 bad
+  /// arguments, -4 no matching place near the position. -5 is set on the
+  /// Dart side only, when the native call returns a null pointer.
+  final int status;
+
+  @override
+  String toString() => 'NativePoiDetailsException(status: $status)';
+}
+
+/// Reads the facts that the map has about one place: the feature of the
+/// classificator [typePaths] within a few meters of ([lat], [lon]),
+/// preferring the one named [name]. An empty [name] or [typePaths] widens
+/// the match to any name or any type.
+///
+/// The keys are `opening_hours` (the raw OSM value), `cuisine`, `address`,
+/// `phone`, `website`, `email`, `wheelchair` (`yes`, `limited` or `no`),
+/// `internet_access`, `outdoor_seating`, `operator`, `brand` and
+/// `description`, in this order; a fact without a value is left out.
+///
+/// It does not move the camera or touch the search state, and it may run in
+/// a background isolate. Throws [NativePoiDetailsException] on a native
+/// error.
+Map<String, String> readNativePoiDetails(
+  double lat,
+  double lon,
+  String name,
+  List<String> typePaths,
+) {
+  final namePtr = name.toNativeUtf8().cast<Char>();
+  final pathPtrs = malloc<Pointer<Char>>(
+    typePaths.isEmpty ? 1 : typePaths.length,
+  );
+  for (var i = 0; i < typePaths.length; i++) {
+    pathPtrs[i] = typePaths[i].toNativeUtf8().cast<Char>();
+  }
+  Pointer<AgusPoiDetails> detailsPtr = nullptr;
+  try {
+    detailsPtr = _bindings.comaps_get_poi_details(
+      lat,
+      lon,
+      namePtr,
+      pathPtrs,
+      typePaths.length,
+    );
+    if (detailsPtr == nullptr) {
+      throw const NativePoiDetailsException(-5);
+    }
+    final details = detailsPtr.ref;
+    if (details.status != 0) {
+      throw NativePoiDetailsException(details.status);
+    }
+    final facts = <String, String>{};
+    for (var i = 0; i < details.detail_count; i++) {
+      final row = (details.details + i).ref;
+      final key = _nativeSearchString(row.key);
+      final value = _nativeSearchString(row.value);
+      if (key.isNotEmpty && value.isNotEmpty) facts[key] = value;
+    }
+    return Map<String, String>.unmodifiable(facts);
+  } finally {
+    if (detailsPtr != nullptr) {
+      _bindings.comaps_poi_details_free(detailsPtr);
+    }
+    for (var i = 0; i < typePaths.length; i++) {
+      malloc.free(pathPtrs[i]);
+    }
+    malloc.free(pathPtrs);
+    malloc.free(namePtr);
+  }
+}
+
 /// Select the native CoMaps router engine.
 int setNavigationRouter(NavigationRouterType routerType) {
   try {

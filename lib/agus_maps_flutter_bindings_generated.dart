@@ -698,6 +698,55 @@ class AgusMapsFlutterBindings {
   late final _comaps_poi_results_free = _comaps_poi_results_freePtr
       .asFunction<void Function(ffi.Pointer<AgusPoiResults>)>();
 
+  /// Reads the facts of one place: the feature of the given classificator
+  /// types (as for comaps_query_pois) within a few meters of (lat, lon),
+  /// preferring the one whose name equals name. An empty name or no type
+  /// paths widen the match to any name or any type. It does not move the
+  /// camera or touch the search state, so a background thread may call it.
+  /// Call comaps_poi_details_free when done.
+  ffi.Pointer<AgusPoiDetails> comaps_get_poi_details(
+    double lat,
+    double lon,
+    ffi.Pointer<ffi.Char> name,
+    ffi.Pointer<ffi.Pointer<ffi.Char>> type_paths,
+    int type_count,
+  ) {
+    return _comaps_get_poi_details(
+      lat,
+      lon,
+      name,
+      type_paths,
+      type_count,
+    );
+  }
+
+  late final _comaps_get_poi_detailsPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Pointer<AgusPoiDetails> Function(
+              ffi.Double,
+              ffi.Double,
+              ffi.Pointer<ffi.Char>,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>,
+              ffi.Int32)>>('comaps_get_poi_details');
+  late final _comaps_get_poi_details = _comaps_get_poi_detailsPtr.asFunction<
+      ffi.Pointer<AgusPoiDetails> Function(double, double, ffi.Pointer<ffi.Char>,
+          ffi.Pointer<ffi.Pointer<ffi.Char>>, int)>();
+
+  /// Frees a result allocated by comaps_get_poi_details.
+  void comaps_poi_details_free(
+    ffi.Pointer<AgusPoiDetails> data,
+  ) {
+    return _comaps_poi_details_free(
+      data,
+    );
+  }
+
+  late final _comaps_poi_details_freePtr = _lookup<
+          ffi.NativeFunction<ffi.Void Function(ffi.Pointer<AgusPoiDetails>)>>(
+      'comaps_poi_details_free');
+  late final _comaps_poi_details_free = _comaps_poi_details_freePtr
+      .asFunction<void Function(ffi.Pointer<AgusPoiDetails>)>();
+
   int comaps_navigation_set_router(
     int routerType,
   ) {
@@ -2208,6 +2257,29 @@ final class AgusPoiResults extends ffi.Struct {
   external int result_count;
 
   external ffi.Pointer<AgusPoiResult> results;
+}
+
+/// One fact about a place found by comaps_get_poi_details. key is one of
+/// "opening_hours" (the raw OSM value), "cuisine" (English, joined with
+/// ", "), "address", "phone", "website", "email", "wheelchair" ("yes",
+/// "limited" or "no"), "internet_access", "outdoor_seating", "operator",
+/// "brand" or "description". Only facts with a value are listed.
+final class AgusPoiDetail extends ffi.Struct {
+  external ffi.Pointer<ffi.Char> key;
+
+  external ffi.Pointer<ffi.Char> value;
+}
+
+/// Status values: 0=ok, -1=framework not ready, -2=read failed,
+/// -3=bad arguments, -4=no matching place near the position.
+final class AgusPoiDetails extends ffi.Struct {
+  @ffi.Int32()
+  external int status;
+
+  @ffi.Int32()
+  external int detail_count;
+
+  external ffi.Pointer<AgusPoiDetail> details;
 }
 
 /// Navigation route point types mirrored from RouteMarkType:

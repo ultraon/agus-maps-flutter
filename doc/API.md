@@ -468,6 +468,15 @@ Data model for place page details.
 - **Fields**: `title`, `subtitle`, `address`, `lat`, `lon`, `coordinates`, `metadataTags`, `featureId`, `objectType`, `openingMode`, `roadType`, `rawTypes`
 - **Metadata**: iOS and macOS serialize readable OSM-style metadata tags such as `wikipedia`, `phone`, `iata`, `ele`, and `internet_access`. Flutter localizes labels from these tags.
 
+#### `readNativePoiDetails(double lat, double lon, String name, List<String> typePaths) -> Map<String, String>`
+Read the facts that the map data has about one place, without selecting it on the map.
+- **Match**: the feature of the classificator `typePaths` (dash paths such as `amenity-cafe`) within 15 m of the position. A feature whose name equals `name` wins; otherwise the nearest one does. An empty `name` or `typePaths` widens the match.
+- **Returns**: an ordered map with the keys `opening_hours` (raw OSM value), `cuisine` (English), `address`, `phone`, `website`, `email`, `wheelchair` (`yes`, `limited`, `no`), `internet_access`, `outdoor_seating`, `operator`, `brand` and `description` (English, else the default language). A fact without a value is left out.
+- **Errors**: throws `NativePoiDetailsException` with the native status: -1 framework not ready, -2 read failed, -3 bad arguments, -4 no matching place, -5 null result.
+- **Threading**: it does not move the camera or touch the search state, so it may run in a background isolate.
+- **Implementation**: FFI `comaps_get_poi_details` and `comaps_poi_details_free` (`src/agus_poi_query.hpp`, shared by the Android/shared and iOS sources)
+- **Platforms**: Android, iOS
+
 ### Helper Services
 
 #### `MwmStorage` Class (Dart-only)

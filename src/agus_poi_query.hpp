@@ -12,6 +12,12 @@
 #include "indexer/feature_utils.hpp"
 #include "indexer/scales.hpp"
 
+#include "indexer/data_source.hpp"
+
+#include "search/reverse_geocoder.hpp"
+
+#include "i18n/string_utf8_multilang.hpp"
+
 #include "geometry/mercator.hpp"
 
 #include "base/logging.hpp"
@@ -303,6 +309,191 @@ static inline AgusPoiResults * QueryPois(Framework * framework, double lat, doub
     LOG(LERROR, ("Agus POI query failed with an unknown exception"));
     return NewPoiResults(kFailed);
   }
+}
+
+namespace
+{
+// How far from the requested position a feature may lie. The explore rows
+// carry the feature centre, so the right feature is normally at 0 m.
+constexpr double kDetailsMatchMeters = 15.0;
+constexpr int32_t kDetailsNotFound = -4;
+
+using DetailRow = std::pair<std::string, std::string>;
+
+AgusPoiDetails * NewPoiDetails(int32_t status)
+{
+  auto * details = static_cast<AgusPoiDetails *>(std::calloc(1, sizeof(AgusPoiDetails)));
+  if (details)
+    details->status = status;
+  return details;
+}
+
+AgusPoiDetails * CopyDetails(std::vector<DetailRow> const & rows)
+{
+  auto * details = NewPoiDetails(kOk);
+  if (!details || rows.empty())
+    return details;
+
+  details->details = static_cast<AgusPoiDetail *>(std::calloc(rows.size(), sizeof(AgusPoiDetail)));
+  if (!details->details)
+  {
+    details->status = kFailed;
+    return details;
+  }
+  details->detail_count = static_cast<int32_t>(rows.size());
+  for (size_t i = 0; i < rows.size(); ++i)
+  {
+    details->details[i].key = CopyPoiCString(rows[i].first);
+    details->details[i].value = CopyPoiCString(rows[i].second);
+  }
+  return details;
+}
+
+// The OSM description in English, or in the default language when the
+// feature has no English one.
+std::string DescriptionOf(FeatureType & feature)
+{
+  std::string_view const raw = feature.GetMetadata(feature::Metadata::FMD_DESCRIPTION);
+  if (raw.empty())
+    return {};
+  auto const texts = StringUtf8Multilang::FromBuffer(std::string(raw));
+  std::string text;
+  if (texts.GetString(localisation::kEnglishLanguageIndex, text) && !text.empty())
+    return text;
+  texts.GetString(localisation::kDefaultNameIndex, text);
+  return text;
+}
+
+// "yes", "limited", "no", or empty from the wheelchair-* type.
+std::string WheelchairOf(FeatureType & feature)
+{
+  std::string value = feature::GetReadableWheelchairType(feature::TypesHolder(feature));
+  std::string const prefix = "wheelchair-";
+  if (value.rfind(prefix, 0) == 0)
+    value.erase(0, prefix.size());
+  return value;
+}
+
+std::string AddressOf(Framework & framework, FeatureType & feature)
+{
+  search::ReverseGeocoder const coder(framework.GetDataSource());
+  search::ReverseGeocoder::Address address;
+  if (coder.GetExactAddress(feature, address))
+  {
+    std::string text = address.FormatAddress();
+    if (!text.empty())
+      return text;
+  }
+  return framework.GetAddressAtPoint(feature::GetCenter(feature)).FormatAddress();
+}
+
+std::vector<DetailRow> DetailsOf(Framework & framework, FeatureType & feature)
+{
+  std::vector<DetailRow> rows;
+  auto const add = [&rows](char const * key, std::string value)
+  {
+    if (!value.empty())
+      rows.emplace_back(key, std::move(value));
+  };
+  auto const meta = [&feature](feature::Metadata::EType type)
+  { return std::string(feature.GetMetadata(type)); };
+
+  add("opening_hours", meta(feature::Metadata::FMD_OPEN_HOURS));
+  add("cuisine", CuisineOf(feature));
+  add("address", AddressOf(framework, feature));
+  add("phone", meta(feature::Metadata::FMD_PHONE_NUMBER));
+  add("website", meta(feature::Metadata::FMD_WEBSITE));
+  add("email", meta(feature::Metadata::FMD_EMAIL));
+  add("wheelchair", WheelchairOf(feature));
+  add("internet_access", meta(feature::Metadata::FMD_INTERNET));
+  add("outdoor_seating", meta(feature::Metadata::FMD_OUTDOOR_SEATING));
+  add("operator", meta(feature::Metadata::FMD_OPERATOR));
+  add("brand", meta(feature::Metadata::FMD_BRAND));
+  add("description", DescriptionOf(feature));
+  return rows;
+}
+
+struct DetailsMatch
+{
+  FeatureID id;
+  bool nameMatches = false;
+  double distanceMeters = std::numeric_limits<double>::max();
+
+  // A name match wins over distance; among equals the nearer one wins.
+  bool IsBetterThan(DetailsMatch const & other) const
+  {
+    if (nameMatches != other.nameMatches)
+      return nameMatches;
+    return distanceMeters < other.distanceMeters;
+  }
+};
+}  // namespace
+
+static inline AgusPoiDetails * GetPoiDetails(Framework * framework, double lat, double lon, char const * name,
+                                             char const * const * typePaths, int32_t typeCount)
+{
+  if (!framework)
+    return NewPoiDetails(kNotReady);
+  if (typeCount < 0 || (typeCount > 0 && !typePaths))
+    return NewPoiDetails(kBadArguments);
+
+  try
+  {
+    auto const types = typeCount > 0 ? ResolveTypes(typePaths, typeCount) : std::vector<RequestedType>{};
+    std::string const wantedName = name ? name : "";
+    m2::PointD const centre = mercator::FromLatLon(lat, lon);
+    m2::RectD const rect = mercator::RectByCenterXYAndSizeInMeters(centre, kDetailsMatchMeters);
+
+    DetailsMatch best;
+    framework->GetDataSource().ForEachInRect([&](FeatureType & feature)
+    {
+      if (!types.empty() && MatchType(feature, types) < 0)
+        return;
+      double const distance = mercator::DistanceOnEarth(centre, feature::GetCenter(feature));
+      if (distance > kDetailsMatchMeters)
+        return;
+      DetailsMatch candidate{feature.GetID(), !wantedName.empty() && NameOf(feature) == wantedName, distance};
+      if (candidate.IsBetterThan(best))
+        best = candidate;
+    }, rect, scales::GetUpperScale());
+
+    if (!best.id.IsValid())
+      return NewPoiDetails(kDetailsNotFound);
+
+    // The feature is read again outside ForEachInRect, because the address
+    // lookup reads the data source itself.
+    FeaturesLoaderGuard const guard(framework->GetDataSource(), best.id.m_mwmId);
+    auto feature = guard.GetFeatureByIndex(best.id.m_index);
+    if (!feature)
+      return NewPoiDetails(kDetailsNotFound);
+    return CopyDetails(DetailsOf(*framework, *feature));
+  }
+  catch (std::exception const & e)
+  {
+    LOG(LERROR, ("Agus POI details failed:", e.what()));
+    return NewPoiDetails(kFailed);
+  }
+  catch (...)
+  {
+    LOG(LERROR, ("Agus POI details failed with an unknown exception"));
+    return NewPoiDetails(kFailed);
+  }
+}
+
+static inline void FreePoiDetails(AgusPoiDetails * data)
+{
+  if (!data)
+    return;
+  if (data->details)
+  {
+    for (int32_t i = 0; i < data->detail_count; ++i)
+    {
+      std::free(const_cast<char *>(data->details[i].key));
+      std::free(const_cast<char *>(data->details[i].value));
+    }
+    std::free(data->details);
+  }
+  std::free(data);
 }
 
 static inline void FreePoiResults(AgusPoiResults * data)

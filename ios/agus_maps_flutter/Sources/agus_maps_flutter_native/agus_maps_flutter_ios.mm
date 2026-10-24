@@ -2080,6 +2080,15 @@ FFI_PLUGIN_EXPORT void comaps_poi_results_free(AgusPoiResults* data) {
     agus_poi_query::FreePoiResults(data);
 }
 
+FFI_PLUGIN_EXPORT AgusPoiDetails* comaps_get_poi_details(double lat, double lon, const char* name,
+                                                         const char** type_paths, int32_t type_count) {
+    return agus_poi_query::GetPoiDetails(g_framework.get(), lat, lon, name, type_paths, type_count);
+}
+
+FFI_PLUGIN_EXPORT void comaps_poi_details_free(AgusPoiDetails* data) {
+    agus_poi_query::FreePoiDetails(data);
+}
+
 FFI_PLUGIN_EXPORT int comaps_register_single_map(const char* fullPath) {
     // Delegate to versioned registration with version=0 for backwards compatibility
     return comaps_register_single_map_with_version(fullPath, 0);
