@@ -886,6 +886,62 @@ class AgusMapsFlutterBindings {
   late final _comaps_navigation_status_free = _comaps_navigation_status_freePtr
       .asFunction<void Function(ffi.Pointer<AgusNavigationStatus>)>();
 
+  /// Fills out with the next turns of Route::GetNextTurns, at any distance.
+  /// Returns out->count. Call it on the thread that owns the framework.
+  int comaps_navigation_get_next_turns(
+    ffi.Pointer<AgusNavigationTurns> out,
+  ) {
+    return _comaps_navigation_get_next_turns(
+      out,
+    );
+  }
+
+  late final _comaps_navigation_get_next_turnsPtr = _lookup<
+          ffi.NativeFunction<
+              ffi.Int32 Function(ffi.Pointer<AgusNavigationTurns>)>>(
+      'comaps_navigation_get_next_turns');
+  late final _comaps_navigation_get_next_turns =
+      _comaps_navigation_get_next_turnsPtr
+          .asFunction<int Function(ffi.Pointer<AgusNavigationTurns>)>();
+
+  /// Returns the junction points of the built route, with extra points so
+  /// that no two neighbours are more than max_step_meters apart (as the
+  /// Android nativeGetRouteJunctionPoints does). A max_step_meters of 0 or
+  /// less adds no points; a positive value below 1 m counts as 1 m. Returns
+  /// null without a valid route. Call comaps_navigation_route_points_free
+  /// when done.
+  ffi.Pointer<AgusRoutePoints> comaps_navigation_get_route_points(
+    double max_step_meters,
+  ) {
+    return _comaps_navigation_get_route_points(
+      max_step_meters,
+    );
+  }
+
+  late final _comaps_navigation_get_route_pointsPtr = _lookup<
+          ffi
+          .NativeFunction<ffi.Pointer<AgusRoutePoints> Function(ffi.Double)>>(
+      'comaps_navigation_get_route_points');
+  late final _comaps_navigation_get_route_points =
+      _comaps_navigation_get_route_pointsPtr
+          .asFunction<ffi.Pointer<AgusRoutePoints> Function(double)>();
+
+  /// Frees a result allocated by comaps_navigation_get_route_points.
+  void comaps_navigation_route_points_free(
+    ffi.Pointer<AgusRoutePoints> points,
+  ) {
+    return _comaps_navigation_route_points_free(
+      points,
+    );
+  }
+
+  late final _comaps_navigation_route_points_freePtr = _lookup<
+          ffi.NativeFunction<ffi.Void Function(ffi.Pointer<AgusRoutePoints>)>>(
+      'comaps_navigation_route_points_free');
+  late final _comaps_navigation_route_points_free =
+      _comaps_navigation_route_points_freePtr
+          .asFunction<void Function(ffi.Pointer<AgusRoutePoints>)>();
+
   void comaps_navigation_set_measurement_units(
     int units,
   ) {
@@ -2185,6 +2241,40 @@ final class AgusNavigationStatus extends ffi.Struct {
   external ffi.Pointer<ffi.Char> next_street;
 
   external ffi.Pointer<ffi.Char> next_next_street;
+}
+
+/// One turn ahead on the followed route. pedestrian_direction mirrors
+/// routing::turns::PedestrianDirection: 0=None, 1=GoStraight, 2=TurnRight,
+/// 3=TurnLeft, 4=ReachedYourDestination. distance_meters is the distance
+/// along the route from the current position to the turn.
+final class AgusNavigationTurn extends ffi.Struct {
+  @ffi.Int32()
+  external int pedestrian_direction;
+
+  @ffi.Double()
+  external double distance_meters;
+}
+
+const int AGUS_NAVIGATION_MAX_TURNS = 2;
+
+/// The current turn and, when it is not the destination, the turn after it.
+/// count is 0 to AGUS_NAVIGATION_MAX_TURNS, or -1 when no navigable route
+/// exists.
+final class AgusNavigationTurns extends ffi.Struct {
+  @ffi.Int32()
+  external int count;
+
+  @ffi.Array.multi([2])
+  external ffi.Array<AgusNavigationTurn> turns;
+}
+
+/// The points of the built route, in route order. lat_lon holds count pairs
+/// of latitude and longitude in degrees.
+final class AgusRoutePoints extends ffi.Struct {
+  @ffi.Int32()
+  external int count;
+
+  external ffi.Pointer<ffi.Double> lat_lon;
 }
 
 final class AgusDuckDBRenderFeature extends ffi.Struct {

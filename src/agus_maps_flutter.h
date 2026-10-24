@@ -336,6 +336,46 @@ FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_following(void);
 FFI_PLUGIN_EXPORT AgusNavigationStatus* comaps_navigation_copy_status(void);
 FFI_PLUGIN_EXPORT void comaps_navigation_status_free(AgusNavigationStatus* status);
 
+// One turn ahead on the followed route. pedestrian_direction mirrors
+// routing::turns::PedestrianDirection: 0=None, 1=GoStraight, 2=TurnRight,
+// 3=TurnLeft, 4=ReachedYourDestination. distance_meters is the distance
+// along the route from the current position to the turn.
+typedef struct {
+	int32_t pedestrian_direction;
+	double distance_meters;
+} AgusNavigationTurn;
+
+#define AGUS_NAVIGATION_MAX_TURNS 2
+
+// The current turn and, when it is not the destination, the turn after it.
+// count is 0 to AGUS_NAVIGATION_MAX_TURNS, or -1 when no navigable route
+// exists.
+typedef struct {
+	int32_t count;
+	AgusNavigationTurn turns[AGUS_NAVIGATION_MAX_TURNS];
+} AgusNavigationTurns;
+
+// Fills out with the next turns of Route::GetNextTurns, at any distance.
+// Returns out->count. Call it on the thread that owns the framework.
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_next_turns(AgusNavigationTurns* out);
+
+// The points of the built route, in route order. lat_lon holds count pairs
+// of latitude and longitude in degrees.
+typedef struct {
+	int32_t count;
+	double* lat_lon;
+} AgusRoutePoints;
+
+// Returns the junction points of the built route, with extra points so that
+// no two neighbours are more than max_step_meters apart (as the Android
+// nativeGetRouteJunctionPoints does). A max_step_meters of 0 or less adds no
+// points; a positive value below 1 m counts as 1 m. Returns null without a
+// valid route. Call comaps_navigation_route_points_free when done.
+FFI_PLUGIN_EXPORT AgusRoutePoints* comaps_navigation_get_route_points(double max_step_meters);
+
+// Frees a result allocated by comaps_navigation_get_route_points.
+FFI_PLUGIN_EXPORT void comaps_navigation_route_points_free(AgusRoutePoints* points);
+
 FFI_PLUGIN_EXPORT void comaps_navigation_set_measurement_units(int32_t units);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_measurement_units(void);
 FFI_PLUGIN_EXPORT void comaps_navigation_set_turn_notifications_enabled(int32_t enabled);

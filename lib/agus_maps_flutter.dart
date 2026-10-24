@@ -355,6 +355,41 @@ class NavigationDistance {
   final NavigationDistanceUnit unit;
 }
 
+/// The pedestrian direction of a turn, mirroring CoMaps
+/// `routing::turns::PedestrianDirection`.
+enum PedestrianTurn {
+  none,
+  goStraight,
+  turnRight,
+  turnLeft,
+  reachedYourDestination;
+
+  static PedestrianTurn fromNative(int value) {
+    if (value < 0 || value >= PedestrianTurn.values.length) {
+      return PedestrianTurn.none;
+    }
+    return PedestrianTurn.values[value];
+  }
+}
+
+/// One turn ahead on the followed route.
+class NavigationTurn {
+  const NavigationTurn({required this.direction, required this.distanceMeters});
+
+  final PedestrianTurn direction;
+
+  /// The distance along the route from the current position to the turn.
+  final double distanceMeters;
+}
+
+/// One point of the built route, in degrees.
+class NavigationRoutePoint {
+  const NavigationRoutePoint({required this.lat, required this.lon});
+
+  final double lat;
+  final double lon;
+}
+
 /// Car routing road types that CoMaps should avoid when calculating routes.
 class NavigationRoutingOptions {
   const NavigationRoutingOptions({
@@ -967,6 +1002,63 @@ NavigationStatus? getNavigationStatus() {
     );
   } finally {
     _bindings.comaps_navigation_status_free(statusPtr);
+  }
+}
+
+/// The current turn and, when it is not the destination, the turn after it,
+/// at any distance. Returns null when no navigable route exists.
+///
+/// Call it on the main isolate: it reads the routing session of the map.
+List<NavigationTurn>? getNavigationNextTurns() {
+  final out = calloc<AgusNavigationTurns>();
+  try {
+    final count = _bindings.comaps_navigation_get_next_turns(out);
+    if (count < 0) return null;
+    final turns = out.ref.turns;
+    return List<NavigationTurn>.unmodifiable([
+      for (var i = 0; i < count && i < AGUS_NAVIGATION_MAX_TURNS; i++)
+        NavigationTurn(
+          direction: PedestrianTurn.fromNative(turns[i].pedestrian_direction),
+          distanceMeters: turns[i].distance_meters,
+        ),
+    ]);
+  } on ArgumentError catch (error) {
+    if (kDebugMode) {
+      debugPrint('[AgusMap] Next turns are unavailable: $error');
+    }
+    return null;
+  } finally {
+    calloc.free(out);
+  }
+}
+
+/// The points of the built route in route order, with extra points so that
+/// no two neighbours are more than [maxStepMeters] apart. A [maxStepMeters]
+/// of 0 adds no points. Returns null without a valid route.
+///
+/// Call it on the main isolate: it reads the routing session of the map.
+List<NavigationRoutePoint>? getNavigationRoutePoints({
+  double maxStepMeters = 0,
+}) {
+  Pointer<AgusRoutePoints> pointsPtr;
+  try {
+    pointsPtr = _bindings.comaps_navigation_get_route_points(maxStepMeters);
+  } on ArgumentError catch (error) {
+    if (kDebugMode) {
+      debugPrint('[AgusMap] Route points are unavailable: $error');
+    }
+    return null;
+  }
+  if (pointsPtr == nullptr) return null;
+  try {
+    final points = pointsPtr.ref;
+    final latLon = points.lat_lon;
+    return List<NavigationRoutePoint>.unmodifiable([
+      for (var i = 0; i < points.count; i++)
+        NavigationRoutePoint(lat: latLon[2 * i], lon: latLon[2 * i + 1]),
+    ]);
+  } finally {
+    _bindings.comaps_navigation_route_points_free(pointsPtr);
   }
 }
 

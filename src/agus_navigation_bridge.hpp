@@ -13,12 +13,22 @@
 #include "routing/routing_options.hpp"
 #include "routing/speed_camera_manager.hpp"
 
-#include "geometry/mercator.hpp"
+#include "routing/route.hpp"
+#include "routing/routing_session.hpp"
+#include "routing/turns.hpp"
 
+#include "geometry/distance_on_sphere.hpp"
+#include "geometry/latlon.hpp"
+#include "geometry/mercator.hpp"
+#include "geometry/point_with_altitude.hpp"
+
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace agus::navigation
 {
@@ -277,6 +287,112 @@ inline void FreeStatus(AgusNavigationStatus * status)
   FreeString(status->next_street);
   FreeString(status->next_next_street);
   std::free(status);
+}
+
+// The route of the session while it can be followed, or null. Route
+// methods such as GetNextTurns CHECK-fail on a route that is not valid.
+inline std::shared_ptr<routing::Route> NavigableRoute(Framework * framework)
+{
+  if (framework == nullptr)
+    return nullptr;
+  auto & manager = framework->GetRoutingManager();
+  if (!manager.IsRoutingActive())
+    return nullptr;
+  auto const & session = manager.RoutingSession();
+  if (!session.IsNavigable())
+    return nullptr;
+  auto route = session.GetRouteForTests();
+  if (!route || !route->IsValid())
+    return nullptr;
+  return route;
+}
+
+inline int32_t GetNextTurns(Framework * framework, AgusNavigationTurns * out)
+{
+  if (out == nullptr)
+    return -1;
+  *out = AgusNavigationTurns{};
+  out->count = -1;
+
+  auto const route = NavigableRoute(framework);
+  if (!route)
+    return -1;
+
+  std::vector<routing::turns::TurnItemDist> turns;
+  route->GetNextTurns(turns);
+  auto const count = std::min<size_t>(turns.size(), AGUS_NAVIGATION_MAX_TURNS);
+  for (size_t i = 0; i < count; ++i)
+  {
+    out->turns[i].pedestrian_direction =
+        static_cast<int32_t>(turns[i].m_turnItem.m_pedestrianTurn);
+    out->turns[i].distance_meters = turns[i].m_distMeters;
+  }
+  out->count = static_cast<int32_t>(count);
+  return out->count;
+}
+
+// Smaller steps would allocate millions of points for a city route.
+inline constexpr double kMinRoutePointStepMeters = 1.0;
+
+inline AgusRoutePoints * CopyRoutePoints(Framework * framework, double maxStepMeters)
+{
+  if (!NavigableRoute(framework))
+    return nullptr;
+
+  std::vector<geometry::PointWithAltitude> junctions;
+  if (!framework->GetRoutingManager().RoutingSession().GetRouteJunctionPoints(junctions) ||
+      junctions.empty())
+    return nullptr;
+
+  bool const interpolate = maxStepMeters > 0.0;
+  double const step = std::max(maxStepMeters, kMinRoutePointStepMeters);
+  std::vector<ms::LatLon> points;
+  points.reserve(junctions.size());
+  points.push_back(junctions[0].ToLatLon());
+  for (size_t i = 1; i < junctions.size(); ++i)
+  {
+    if (interpolate)
+    {
+      double const dist =
+          ms::DistanceOnEarth(junctions[i - 1].ToLatLon(), junctions[i].ToLatLon());
+      if (dist > step)
+      {
+        int const steps = static_cast<int>(dist / step) + 1;
+        for (int s = 1; s < steps; ++s)
+        {
+          points.push_back(junctions[i - 1]
+                               .Interpolate(junctions[i], static_cast<double>(s) / steps)
+                               .ToLatLon());
+        }
+      }
+    }
+    points.push_back(junctions[i].ToLatLon());
+  }
+
+  auto * out = static_cast<AgusRoutePoints *>(std::calloc(1, sizeof(AgusRoutePoints)));
+  if (out == nullptr)
+    return nullptr;
+  out->lat_lon = static_cast<double *>(std::malloc(points.size() * 2 * sizeof(double)));
+  if (out->lat_lon == nullptr)
+  {
+    std::free(out);
+    return nullptr;
+  }
+  for (size_t i = 0; i < points.size(); ++i)
+  {
+    out->lat_lon[2 * i] = points[i].m_lat;
+    out->lat_lon[2 * i + 1] = points[i].m_lon;
+  }
+  out->count = static_cast<int32_t>(points.size());
+  return out;
+}
+
+inline void FreeRoutePoints(AgusRoutePoints * points)
+{
+  if (points == nullptr)
+    return;
+  std::free(points->lat_lon);
+  std::free(points);
 }
 
 inline void SetTurnNotificationsEnabled(Framework * framework, int32_t enabled)

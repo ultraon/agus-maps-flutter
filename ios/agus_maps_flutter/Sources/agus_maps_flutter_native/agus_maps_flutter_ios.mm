@@ -1729,6 +1729,18 @@ FFI_PLUGIN_EXPORT void comaps_navigation_status_free(AgusNavigationStatus* statu
     agus::navigation::FreeStatus(status);
 }
 
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_get_next_turns(AgusNavigationTurns* out) {
+    return agus::navigation::GetNextTurns(g_framework.get(), out);
+}
+
+FFI_PLUGIN_EXPORT AgusRoutePoints* comaps_navigation_get_route_points(double max_step_meters) {
+    return agus::navigation::CopyRoutePoints(g_framework.get(), max_step_meters);
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_route_points_free(AgusRoutePoints* points) {
+    agus::navigation::FreeRoutePoints(points);
+}
+
 FFI_PLUGIN_EXPORT void comaps_navigation_set_measurement_units(int32_t units) {
     agus::navigation::SetMeasurementUnits(g_framework.get(), units);
     WakeRenderer();
