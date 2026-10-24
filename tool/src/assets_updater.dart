@@ -67,13 +67,6 @@ Future<void> copyDataFiles() async {
     'countries.txt',
     'countries_meta.txt',
     'packed_polygons.bin',
-    'drules_proto.bin',
-    'drules_proto_default_light.bin',
-    'drules_proto_default_dark.bin',
-    'drules_proto_outdoors_light.bin',
-    'drules_proto_outdoors_dark.bin',
-    'drules_proto_vehicle_light.bin',
-    'drules_proto_vehicle_dark.bin',
     'drules_hash',
     'transit_colors.txt',
     'colors.txt',
@@ -87,6 +80,18 @@ Future<void> copyDataFiles() async {
       final dest = path.join(destDataDir, file);
       await File(src).copy(dest);
       print('  Copied: $file');
+    }
+  }
+
+  // Copy every drawing rules file. Since v2026.10.05-19 CoMaps has one style
+  // per transport mode, and the default style on iOS is the walking style.
+  await for (final entity in Directory(comapsDataDir).list()) {
+    final fileName = path.basename(entity.path);
+    if (entity is File &&
+        fileName.startsWith('drules_proto') &&
+        fileName.endsWith('.bin')) {
+      await entity.copy(path.join(destDataDir, fileName));
+      print('  Copied: $fileName');
     }
   }
 

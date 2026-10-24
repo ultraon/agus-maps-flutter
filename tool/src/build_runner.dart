@@ -669,6 +669,21 @@ Future<void> _generateComapsData() async {
       );
     }
 
+    // Since v2026.10.05-19 CoMaps keeps the translation sources in
+    // data/translations and converts them into data/*-strings, which the
+    // categories step and the copied assets read.
+    final generateJsonStringsScript =
+        path.join(comapsDir, 'tools', 'unix', 'generate_json_strings.sh');
+    if (await File(generateJsonStringsScript).exists()) {
+      print('Generating JSON strings...');
+      await runProcess(
+        'bash',
+        [generateJsonStringsScript],
+        workingDirectory: comapsDir,
+        environment: env,
+      );
+    }
+
     // Generate categories
     final generateCategoriesScript =
         path.join(comapsDir, 'tools', 'unix', 'generate_categories.sh');

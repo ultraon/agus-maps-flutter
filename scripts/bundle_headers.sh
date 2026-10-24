@@ -109,6 +109,7 @@ bundle_comaps_headers() {
         "ge0"
         "generator"
         "geometry"
+        "i18n"
         "indexer"
         "kml"
         "map"

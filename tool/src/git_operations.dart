@@ -243,7 +243,7 @@ Future<void> initSubmodules({String? comapsDir}) async {
     );
     content = content.replaceAll(
       'https://codeberg.org/comaps/kothic.git',
-      'https://github.com/organicmaps/kothic.git',
+      'https://github.com/comaps/kothic.git',
     );
 
     if (content != originalContent) {
