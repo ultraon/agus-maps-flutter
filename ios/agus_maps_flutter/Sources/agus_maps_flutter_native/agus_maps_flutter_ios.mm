@@ -56,6 +56,7 @@
 #include "kml/types.hpp"
 #include "agus_navigation_bridge.hpp"
 #include "agus_search_bridge.hpp"
+#include "agus_poi_query.hpp"
 
 // Our Metal context factory
 #include "AgusMetalContextFactory.h"
@@ -2049,6 +2050,17 @@ FFI_PLUGIN_EXPORT int32_t comaps_search_show_result(int32_t index) {
 
 FFI_PLUGIN_EXPORT void comaps_search_cancel(void) {
     agus_search_bridge::Cancel(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT AgusPoiResults* comaps_query_pois(double lat, double lon, double radius_meters,
+                                                    const char** type_paths, int32_t type_count,
+                                                    int32_t max_results) {
+    return agus_poi_query::QueryPois(g_framework.get(), lat, lon, radius_meters, type_paths, type_count,
+                                     max_results);
+}
+
+FFI_PLUGIN_EXPORT void comaps_poi_results_free(AgusPoiResults* data) {
+    agus_poi_query::FreePoiResults(data);
 }
 
 FFI_PLUGIN_EXPORT int comaps_register_single_map(const char* fullPath) {

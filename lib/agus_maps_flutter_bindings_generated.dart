@@ -647,6 +647,57 @@ class AgusMapsFlutterBindings {
   late final _comaps_search_cancel =
       _comaps_search_cancelPtr.asFunction<void Function()>();
 
+  /// Reads every feature of the given classificator types (dash paths such as
+  /// "amenity-cafe") within radius_meters of (lat, lon) from the registered
+  /// maps, nearest first, at most max_results. It does not move the camera or
+  /// touch the search state, so a background thread may call it. Call
+  /// comaps_poi_results_free when done.
+  ffi.Pointer<AgusPoiResults> comaps_query_pois(
+    double lat,
+    double lon,
+    double radius_meters,
+    ffi.Pointer<ffi.Pointer<ffi.Char>> type_paths,
+    int type_count,
+    int max_results,
+  ) {
+    return _comaps_query_pois(
+      lat,
+      lon,
+      radius_meters,
+      type_paths,
+      type_count,
+      max_results,
+    );
+  }
+
+  late final _comaps_query_poisPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Pointer<AgusPoiResults> Function(
+              ffi.Double,
+              ffi.Double,
+              ffi.Double,
+              ffi.Pointer<ffi.Pointer<ffi.Char>>,
+              ffi.Int32,
+              ffi.Int32)>>('comaps_query_pois');
+  late final _comaps_query_pois = _comaps_query_poisPtr.asFunction<
+      ffi.Pointer<AgusPoiResults> Function(double, double, double,
+          ffi.Pointer<ffi.Pointer<ffi.Char>>, int, int)>();
+
+  /// Frees a result allocated by comaps_query_pois.
+  void comaps_poi_results_free(
+    ffi.Pointer<AgusPoiResults> data,
+  ) {
+    return _comaps_poi_results_free(
+      data,
+    );
+  }
+
+  late final _comaps_poi_results_freePtr = _lookup<
+          ffi.NativeFunction<ffi.Void Function(ffi.Pointer<AgusPoiResults>)>>(
+      'comaps_poi_results_free');
+  late final _comaps_poi_results_free = _comaps_poi_results_freePtr
+      .asFunction<void Function(ffi.Pointer<AgusPoiResults>)>();
+
   int comaps_navigation_set_router(
     int routerType,
   ) {
@@ -2018,6 +2069,36 @@ final class AgusSearchResults extends ffi.Struct {
   external int result_count;
 
   external ffi.Pointer<AgusSearchResult> results;
+}
+
+/// One feature found by comaps_query_pois. type_index is the position of the
+/// matching path in the request. name is empty when the feature has none.
+final class AgusPoiResult extends ffi.Struct {
+  external ffi.Pointer<ffi.Char> name;
+
+  @ffi.Int32()
+  external int type_index;
+
+  @ffi.Double()
+  external double lat;
+
+  @ffi.Double()
+  external double lon;
+
+  @ffi.Double()
+  external double distance_meters;
+}
+
+/// Status values: 0=ok, -1=framework not ready, -2=query failed,
+/// -3=bad arguments or no known type path.
+final class AgusPoiResults extends ffi.Struct {
+  @ffi.Int32()
+  external int status;
+
+  @ffi.Int32()
+  external int result_count;
+
+  external ffi.Pointer<AgusPoiResult> results;
 }
 
 /// Navigation route point types mirrored from RouteMarkType:

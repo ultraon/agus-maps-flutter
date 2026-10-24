@@ -239,6 +239,40 @@ FFI_PLUGIN_EXPORT int32_t comaps_search_show_result(int32_t index);
 // Cancels active native search requests and clears cached search results.
 FFI_PLUGIN_EXPORT void comaps_search_cancel(void);
 
+// One feature found by comaps_query_pois. type_index is the position of the
+// matching path in the request. name is empty when the feature has none.
+typedef struct {
+	const char* name;
+	int32_t type_index;
+	double lat;
+	double lon;
+	double distance_meters;
+} AgusPoiResult;
+
+// Status values: 0=ok, -1=framework not ready, -2=query failed,
+// -3=bad arguments or no known type path.
+typedef struct {
+	int32_t status;
+	int32_t result_count;
+	AgusPoiResult* results;
+} AgusPoiResults;
+
+// Reads every feature of the given classificator types (dash paths such as
+// "amenity-cafe") within radius_meters of (lat, lon) from the registered
+// maps, nearest first, at most max_results. It does not move the camera or
+// touch the search state, so a background thread may call it. Call
+// comaps_poi_results_free when done.
+FFI_PLUGIN_EXPORT AgusPoiResults* comaps_query_pois(
+	double lat,
+	double lon,
+	double radius_meters,
+	const char** type_paths,
+	int32_t type_count,
+	int32_t max_results);
+
+// Frees a result allocated by comaps_query_pois.
+FFI_PLUGIN_EXPORT void comaps_poi_results_free(AgusPoiResults* data);
+
 // Navigation route point types mirrored from RouteMarkType:
 // 0=Start, 1=Intermediate, 2=Finish.
 // Router types mirror routing::RouterType: 0=Vehicle, 1=Pedestrian,

@@ -686,6 +686,103 @@ void cancelNativeSearch() {
   }
 }
 
+/// One feature found by [queryNativePois].
+class NativePoi {
+  const NativePoi({
+    required this.name,
+    required this.typeIndex,
+    required this.lat,
+    required this.lon,
+    required this.distanceMeters,
+  });
+
+  /// The feature name, or an empty string when it has none.
+  final String name;
+
+  /// The position in the requested type paths of the path that matched.
+  final int typeIndex;
+  final double lat;
+  final double lon;
+
+  /// The straight-line distance from the query centre.
+  final double distanceMeters;
+}
+
+/// Thrown by [queryNativePois] when the native query reports an error.
+class NativePoiQueryException implements Exception {
+  const NativePoiQueryException(this.status);
+
+  /// The native status: -1 framework not ready, -2 query failed (also when
+  /// the native side cannot allocate the rows), -3 bad arguments or no known
+  /// type path. -4 is set on the Dart side only, when the native call returns
+  /// a null pointer.
+  final int status;
+
+  @override
+  String toString() => 'NativePoiQueryException(status: $status)';
+}
+
+/// Reads every feature of the given classificator [typePaths] (dash paths
+/// such as `amenity-cafe`) within [radiusMeters] of ([lat], [lon]) from the
+/// registered maps, nearest first, at most [maxResults].
+///
+/// It does not move the camera or touch the search state, and it may run in
+/// a background isolate. Throws [NativePoiQueryException] on a native error.
+List<NativePoi> queryNativePois(
+  double lat,
+  double lon,
+  double radiusMeters,
+  List<String> typePaths, {
+  int maxResults = 500,
+}) {
+  final pathPtrs = malloc<Pointer<Char>>(
+    typePaths.isEmpty ? 1 : typePaths.length,
+  );
+  for (var i = 0; i < typePaths.length; i++) {
+    pathPtrs[i] = typePaths[i].toNativeUtf8().cast<Char>();
+  }
+  Pointer<AgusPoiResults> resultsPtr = nullptr;
+  try {
+    resultsPtr = _bindings.comaps_query_pois(
+      lat,
+      lon,
+      radiusMeters,
+      pathPtrs,
+      typePaths.length,
+      maxResults,
+    );
+    if (resultsPtr == nullptr) {
+      throw const NativePoiQueryException(-4);
+    }
+    final results = resultsPtr.ref;
+    if (results.status != 0) {
+      throw NativePoiQueryException(results.status);
+    }
+    final pois = <NativePoi>[];
+    for (var i = 0; i < results.result_count; i++) {
+      final row = (results.results + i).ref;
+      pois.add(
+        NativePoi(
+          name: _nativeSearchString(row.name),
+          typeIndex: row.type_index,
+          lat: row.lat,
+          lon: row.lon,
+          distanceMeters: row.distance_meters,
+        ),
+      );
+    }
+    return List<NativePoi>.unmodifiable(pois);
+  } finally {
+    if (resultsPtr != nullptr) {
+      _bindings.comaps_poi_results_free(resultsPtr);
+    }
+    for (var i = 0; i < typePaths.length; i++) {
+      malloc.free(pathPtrs[i]);
+    }
+    malloc.free(pathPtrs);
+  }
+}
+
 /// Select the native CoMaps router engine.
 int setNavigationRouter(NavigationRouterType routerType) {
   try {
