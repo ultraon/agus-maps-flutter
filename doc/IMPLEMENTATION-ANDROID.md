@@ -124,7 +124,7 @@ To debug C++ code in Android Studio:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `COMAPS_TAG` | `v2026.04.23-19` | CoMaps git tag to checkout |
+| `COMAPS_TAG` | `v2026.10.05-19` | CoMaps git tag to checkout |
 | `ANDROID_NDK_HOME` | Auto-detected | Path to Android NDK |
 
 ### Standalone Launch (Without Connected Laptop)
@@ -352,7 +352,7 @@ Expected behavior:
 We pin and fetch the CoMaps repo into `thirdparty/comaps`.
 
 - Repo: `git@github.com:comaps/comaps.git`
-- Default tag: `v2026.04.23-19`
+- Default tag: `v2026.10.05-19`
 - Override tag by setting env var: `COMAPS_TAG`
 
 Commands:

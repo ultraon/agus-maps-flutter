@@ -155,7 +155,7 @@ dart run tool/build.dart --no-cache
 
 This will:
 1. Clone the CoMaps repository to `thirdparty/comaps/`
-2. Checkout the version specified in `$COMAPS_TAG` (default: `v2026.04.23-19`)
+2. Checkout the version specified in `$COMAPS_TAG` (default: `v2026.10.05-19`)
 3. Initialize all git submodules recursively
 4. Apply patches from `patches/comaps/`
 

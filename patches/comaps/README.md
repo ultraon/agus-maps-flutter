@@ -107,27 +107,11 @@ On Android, taking the address of GL symbols like `::glGenVertexArrays` returns 
 - Shader compilation errors would be harder to diagnose
 
 
-### 0005-libs-map-framework-cpp.patch
+### ~~0005-libs-map-framework-cpp.patch~~ (REMOVED)
 
-**File Modified:** `libs/map/framework.cpp`
+**Status:** Removed with the move to CoMaps `v2026.10.05-19`.
 
-**Category:** Debug Logging
-
-**Purpose:** Adds debug logging to track Framework initialization sequence.
-
-**What it does:**
-- Adds `LOG(LDEBUG, ...)` calls around `SetRouterImpl`, `UpdateMinBuildingsTapZoom`, and `editor.SetDelegate`
-- Helps trace initialization flow during debugging
-
-**Why it's needed:**
-Framework initialization involves many components. When debugging startup issues (especially on embedded platforms), knowing exactly where initialization stalls is critical.
-
-**Without this patch:**
-- Initialization failures would be harder to diagnose
-- No visibility into which component causes hangs or crashes during startup
-
-**Status:** Debug/Development patch - could potentially be removed in production builds.
-
+This patch only added `LOG(LDEBUG, ...)` lines to `libs/map/framework.cpp`. It changed no behaviour. Upstream rewrote large parts of this file after `v2026.04.23-19`, so the patch no longer applied. I dropped it instead of rebasing it, because debug logging does not justify a patch that conflicts on every engine update.
 
 ### 0006-libs-map-routing_manager-cpp.patch
 
@@ -152,28 +136,11 @@ Routing initialization is complex and involves multiple factories. Debug logging
 **Status:** Debug/Development patch - could potentially be removed in production builds.
 
 
-### 0007-libs-routing-routing_session-cpp.patch
+### ~~0007-libs-routing-routing_session-cpp.patch~~ (REMOVED)
 
-**File Modified:** `libs/routing/routing_session.cpp`
+**Status:** Removed with the move to CoMaps `v2026.10.05-19`.
 
-**Category:** Debug Logging
-
-**Purpose:** Adds debug logging to track routing session lifecycle.
-
-**What it does:**
-- Logs `RemoveRoute()` operations step by step
-- Logs `Reset()` sequence including route removal and state clearing
-- Logs `SetRouter()` flow including thread checks and reset operations
-
-**Why it's needed:**
-Session state changes need visibility for debugging routing-related crashes or hangs.
-
-**Without this patch:**
-- Routing session state transitions would be invisible
-- Hard to diagnose crashes during route clearing or session reset
-
-**Status:** Debug/Development patch - could potentially be removed in production builds.
-
+This patch only added `LOG(LDEBUG, ...)` lines to `libs/routing/routing_session.cpp`. It changed no behaviour. Upstream rewrote large parts of this file after `v2026.04.23-19`, so the patch no longer applied. I dropped it instead of rebasing it, because debug logging does not justify a patch that conflicts on every engine update.
 
 ### 0008-libs-routing-speed_camera_manager-cpp.patch
 
@@ -518,25 +485,11 @@ zero-initialized long enough for a normal `LINFO` startup log to abort.
 - Potential crash in debug builds
 
 
-### 0029-libs-base-string_utils-hpp.patch
+### ~~0029-libs-base-string_utils-hpp.patch~~ (REMOVED)
 
-**File Modified:** `libs/base/string_utils.hpp`
+**Status:** Removed with the move to CoMaps `v2026.10.05-19`.
 
-**Category:** Windows C Runtime Bug Fix
-
-**Purpose:** Fixes `_strtoi64` and `_strtoui64` parameter passing on Windows.
-
-**What it does:**
-- Changes `&stop` to `stop` in `_strtoi64` and `_strtoui64` calls
-- The `stop` parameter is already a pointer, taking its address gives wrong type
-
-**Why it's needed:**
-The original code passes `char***` where `char**` is expected, causing undefined behavior on Windows.
-
-**Without this patch:**
-- Integer parsing would fail or produce garbage results on Windows
-- Potential crashes from type confusion
-
+Upstream commit `f605983e3` makes the same fix: `_strtoi64` and `_strtoui64` now get `stop`, not `&stop`. The patch is no longer needed.
 
 ### 0030-libs-base-thread_checker-cpp.patch
 
@@ -1356,9 +1309,7 @@ Even with patches 0065 and 0066, jansson's `dtoa.c` macro issues are fragile in 
 ## Potential Removals
 
 The following patches are primarily for debugging and could potentially be removed in production:
-- **0005** - Debug logging in framework.cpp
-- **0006** - Debug logging in routing_manager.cpp  
-- **0007** - Debug logging in routing_session.cpp
+- **0006** - Debug logging in routing_manager.cpp
 - **0008** - Partially debug logging, but the null-check is essential
 
 The following patches have overlapping functionality and could be consolidated:
@@ -1519,9 +1470,11 @@ atlas was generated and loaded correctly.
 - The logs make valid asset-loading problems harder to identify.
 
 
-### 0074-libs-base-localisation-constexpr-string.patch
+### 0074-libs-i18n-localisation-constexpr-string.patch
 
-**File Modified:** `libs/base/localisation.hpp`
+**File Modified:** `libs/i18n/localisation.hpp`
+
+Before CoMaps `v2026.10.05-19` the header was `libs/base/localisation.hpp`, and the patch was named `0074-libs-base-localisation-constexpr-string.patch`. Upstream commit `02c20e2f0` moved the header into the new `libs/i18n` library.
 
 **Category:** Windows Build Compatibility
 
@@ -1568,3 +1521,22 @@ header-only constexpr member.
 - Windows debug builds can fail with
   `libs/editor/feature_type_to_osm.hpp(16,64): error C2131: expression did not
   evaluate to a constant`.
+
+
+### 0076-tools-unix-generate-json-strings-portable-symlink-copy.patch
+
+**File Modified:** `tools/unix/generate_json_strings.sh`
+
+**Category:** macOS Build Tooling
+
+**Purpose:** Copies the symlinked translation files on macOS too.
+
+**What it does:**
+- Replaces `cp -d` with `cp -P`. Both GNU and BSD `cp` support `-P`, which copies a symlink as a symlink.
+
+**Why it's needed:**
+Since CoMaps `v2026.10.05-19` the translation sources live in `data/translations/`, and this script writes the `data/*-strings` folders from them. Some locales are symlinks, for example `countries-strings/default.json/localize.json`, which points at `en.json`. macOS `cp` has no `-d` option. The error happens inside `find -exec`, so the script still exits with 0.
+
+**Without this patch:**
+- On macOS, `data/countries-strings/default.json/` is missing from the generated data and from `example/assets/comaps_data`.
+- An app whose `pubspec.yaml` lists `assets/comaps_data/countries-strings/default.json/` fails to build.

@@ -4,6 +4,8 @@
 
 * **CoMaps dependency refresh**: GitHub Actions and build-tool documentation now use `COMAPS_TAG` v2026.04.23-19.
 
+* **CoMaps v2026.10.05-19**: The default `COMAPS_TAG` is now v2026.10.05-19. This engine reads the MWM format v12 (map snapshots from 260714 on). I rebased the CoMaps patches, dropped the debug-logging patches 0005 and 0007 and the obsolete patch 0029, and moved patch 0074 to `libs/i18n`. The build tool now takes the kothic submodule from `github.com/comaps/kothic`, because the old `organicmaps` mirror does not have the commit this tag needs. The data step now runs `generate_json_strings.sh`, which needs `jq`, and patch 0076 makes that script work with macOS `cp`.
+
 * **Apple CI header bundle fix**: The shared CoMaps header bundle now includes and validates `3party/ankerl/unordered_dense.h`, fixing iOS simulator CI builds that compile against prebuilt XCFrameworks after hiding the full `thirdparty` source checkout.
 
 ### Apple Build & Tooling
