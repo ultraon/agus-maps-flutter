@@ -723,13 +723,17 @@ void cancelNativeSearch() {
 
 /// The open state of a [NativePoi] from its OSM `opening_hours`, at the
 /// device local time of the query.
+///
+/// Known limitation: the engine evaluates the hours in the device time zone,
+/// not in the time zone of the place, like the CoMaps place page. A device
+/// set to another time zone gets a wrong state and change time.
 enum NativePoiOpenState {
   /// The place has no opening hours, or the engine cannot read them.
   unknown,
   open,
   closed,
 
-  /// Open 24/7, or open with no close in the next week.
+  /// The hours are a 24/7 rule.
   alwaysOpen;
 
   /// The state for the native `open_state` value. An unknown value reads
@@ -776,6 +780,12 @@ class NativePoi {
   /// or an empty string.
   final String cuisine;
 }
+
+/// The local time of the native `next_change_seconds` value, a Unix time in
+/// seconds, or null for 0 (no change known).
+DateTime? nativePoiNextChange(int seconds) => seconds > 0
+    ? DateTime.fromMillisecondsSinceEpoch(seconds * 1000)
+    : null;
 
 /// Thrown by [queryNativePois] when the native query reports an error.
 class NativePoiQueryException implements Exception {
@@ -838,11 +848,7 @@ List<NativePoi> queryNativePois(
           lon: row.lon,
           distanceMeters: row.distance_meters,
           openState: NativePoiOpenState.fromNative(row.open_state),
-          nextChange: row.next_change_seconds > 0
-              ? DateTime.fromMillisecondsSinceEpoch(
-                  row.next_change_seconds * 1000,
-                )
-              : null,
+          nextChange: nativePoiNextChange(row.next_change_seconds),
           cuisine: _nativeSearchString(row.cuisine),
         ),
       );

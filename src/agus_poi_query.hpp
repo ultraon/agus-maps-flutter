@@ -26,6 +26,7 @@
 #include <exception>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Reads every feature of the requested classificator types around a point,
@@ -59,8 +60,8 @@ enum PoiOpenState : int32_t
   kOpenAlways = 3,
 };
 
-// A next change further away than this counts as none, as in the CoMaps
-// place page: the opening hours evaluation looks one week ahead.
+// A next change further away than this counts as none: the opening hours
+// evaluation looks one week ahead.
 constexpr time_t kOpenStateHorizonSeconds = 7 * 24 * 60 * 60;
 
 struct OpenStatus
@@ -149,8 +150,9 @@ std::string NameOf(FeatureType & feature)
 }
 
 // The open state of the OSM opening_hours value at the device local time,
-// with the next open or close change. The evaluation uses the device time
-// zone, like the CoMaps place page.
+// with the next open or close change. Known limitation: the evaluation uses
+// the device time zone, not the time zone of the place, like the CoMaps
+// place page. Only a true 24/7 rule reads as always open.
 OpenStatus OpenStatusOf(FeatureType & feature, time_t now)
 {
   OpenStatus status;
@@ -173,22 +175,30 @@ OpenStatus OpenStatusOf(FeatureType & feature, time_t now)
   time_t const next = open ? info.nextTimeClosed : info.nextTimeOpen;
   bool const hasNext = next != std::numeric_limits<time_t>::max() && next > now &&
                        next - now < kOpenStateHorizonSeconds;
-  if (open && !hasNext)
-  {
-    status.state = kOpenAlways;
-    return status;
-  }
   status.state = open ? kOpenNow : kClosedNow;
   if (hasNext)
     status.nextChangeSeconds = static_cast<int64_t>(next);
   return status;
 }
 
-// The classificator cuisine name in plain English: "fish_and_chips" reads
-// "Fish and chips". The app shows English only, so the device language of
-// the CoMaps translations does not apply here.
+// The classificator cuisine name in plain English: "thai" reads "Thai".
+// The app shows English only, so the CoMaps translations, which follow the
+// device language, do not apply here. The table holds the names whose
+// CoMaps English text differs from the plain form.
 std::string ReadableCuisine(std::string raw)
 {
+  static std::pair<char const *, char const *> const kEnglish[] = {
+      {"beef_bowl", "Beef Bowl"},       {"bubble_tea", "Bubble Tea"},
+      {"coffee_shop", "Coffee"},        {"fine_dining", "Fine Dining"},
+      {"fish_and_chips", "Fish and Chips"}, {"ice_cream", "Ice Cream"},
+      {"oriental", "East Asian"},       {"savory_pancakes", "Savory Pancakes"},
+      {"steak_house", "Steak House"},
+  };
+  for (auto const & [key, english] : kEnglish)
+  {
+    if (raw == key)
+      return english;
+  }
   std::replace(raw.begin(), raw.end(), '_', ' ');
   if (!raw.empty())
     raw[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(raw[0])));
@@ -196,13 +206,15 @@ std::string ReadableCuisine(std::string raw)
 }
 
 // The cuisines of the feature joined with ", ", for example "Pizza, Italian",
-// or an empty string.
+// or an empty string. CoMaps stores diet:vegetarian and diet:vegan as
+// cuisine types; they are diets, not cuisines, so they are skipped, as in
+// the CoMaps editor.
 std::string CuisineOf(FeatureType & feature)
 {
   std::string out;
   for (auto const & raw : feature::GetCuisines(feature::TypesHolder(feature)))
   {
-    if (raw.empty())
+    if (raw.empty() || raw == "vegetarian" || raw == "vegan")
       continue;
     if (!out.empty())
       out += ", ";

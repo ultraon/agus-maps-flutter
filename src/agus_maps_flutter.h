@@ -241,8 +241,9 @@ FFI_PLUGIN_EXPORT void comaps_search_cancel(void);
 
 // One feature found by comaps_query_pois. type_index is the position of the
 // matching path in the request. name is empty when the feature has none.
-// open_state comes from the OSM opening_hours at the device local time:
-// 0=unknown or no hours, 1=open, 2=closed, 3=open 24/7.
+// open_state comes from the OSM opening_hours at the device local time
+// (known limitation: the device time zone, not the place's):
+// 0=unknown or no hours, 1=open, 2=closed, 3=open 24/7 (a 24/7 rule only).
 // next_change_seconds is the Unix time of the next close (when open) or the
 // next open (when closed), or 0 when none is known within one week.
 // cuisine is the cuisines in English joined with ", ", or empty.
