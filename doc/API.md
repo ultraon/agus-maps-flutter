@@ -431,7 +431,7 @@ Main Flutter widget that displays a CoMaps map.
 - `initialLat`, `initialLon`: Initial map center (WGS84)
 - `initialZoom`: Initial zoom level (0-20)
 - `onMapReady`: Callback when map is ready
-- `onPlacePage`: Callback with the place page of a tap, or null on empty map. It fires 400 ms after the tap, once CoMaps has confirmed the single tap (its double-tap pause is 220 ms)
+- `onPlacePage`: Callback with the place page of a tap, or null on empty map. It fires 400 ms after the finger lifts from a tap (no move, at most 350 ms long), once CoMaps has confirmed the single tap (its double-tap pause is 220 ms)
 - `controller`: `AgusMapController` for programmatic control
 - `isVisible`: Whether map is currently visible (for `IndexedStack` optimization)
 - `userScale`: Visual scale multiplier for labels (combined with device pixel ratio)

@@ -2866,7 +2866,9 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
 
   // CoMaps confirms a single tap only after its double-tap pause (220 ms,
   // kDoubleTapPauseMs in libs/drape_frontend/user_event_stream.cpp). A read
-  // before that returns the selection of the tap before.
+  // before that returns the selection of the tap before. The other 180 ms
+  // cover the engine frame that applies the selection; 400 ms read the new
+  // selection reliably on a Galaxy S21 FE.
   static const Duration _placePageSettleDelay = Duration(milliseconds: 400);
 
   void _handlePointerDown(PointerDownEvent event) {
