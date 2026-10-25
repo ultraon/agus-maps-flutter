@@ -2864,6 +2864,11 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
   static const double _tapSlop = 8.0;
   static const Duration _tapTimeout = Duration(milliseconds: 350);
 
+  // CoMaps confirms a single tap only after its double-tap pause (220 ms,
+  // kDoubleTapPauseMs in libs/drape_frontend/user_event_stream.cpp). A read
+  // before that returns the selection of the tap before.
+  static const Duration _placePageSettleDelay = Duration(milliseconds: 400);
+
   void _handlePointerDown(PointerDownEvent event) {
     if (widget.onMapPointerDown?.call(event.localPosition) ?? false) {
       _editorCapturedPointers.add(event.pointer);
@@ -3057,7 +3062,7 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
       return;
     }
 
-    Future.delayed(const Duration(milliseconds: 60), () async {
+    Future.delayed(_placePageSettleDelay, () async {
       if (!mounted) return;
       final data = await getCurrentPlacePage();
       if (!mounted) return;
