@@ -246,6 +246,40 @@ inline int32_t RecenterRouteFollowing(Framework * framework, int32_t zoom)
   return routing.IsRoutingFollowing() ? 1 : 0;
 }
 
+// The margin around a route overview, the same as after a route build
+// (kRouteScaleMultiplier in RoutingManager).
+double constexpr kRouteOverviewMargin = 1.5;
+
+// Stops following and shows the box north-up in the visible viewport, as
+// RoutingManager::OnBuildRouteReady does after a route build.
+inline int32_t ShowRouteOverview(Framework * framework, double minLat, double minLon, double maxLat,
+                                 double maxLon)
+{
+  if (framework == nullptr)
+    return -1;
+  auto engine = framework->GetDrapeEngine();
+  if (engine == nullptr)
+    return 0;
+  m2::RectD rect;
+  rect.Add(mercator::FromLatLon(minLat, minLon));
+  rect.Add(mercator::FromLatLon(maxLat, maxLon));
+  rect.Scale(kRouteOverviewMargin);
+  engine->StopLocationFollow();
+  // The plain rect path clamps a tiny box to the engine's scale limits; no
+  // rotation keeps the map north-up.
+  engine->SetModelViewRect(rect, false /* applyRotation */, -1 /* zoom */, true /* isAnim */,
+                           true /* useVisibleViewport */);
+  return 1;
+}
+
+// The engine's Invalidate message restarts the 20 s timer that returns route
+// following after a pan, so a call every few seconds holds an overview.
+inline void HoldRouteOverview(Framework * framework)
+{
+  if (framework != nullptr)
+    framework->InvalidateRendering();
+}
+
 // The framework keeps its screen private, so the scale comes from the length
 // of a pixel row in Mercator units.
 inline double CurrentZoomLevel(Framework * framework)

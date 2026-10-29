@@ -902,6 +902,42 @@ class AgusMapsFlutterBindings {
   late final _comaps_navigation_recenter =
       _comaps_navigation_recenterPtr.asFunction<int Function(int)>();
 
+  /// Stops route following and shows the box, made 1.5 times larger, north-up in
+  /// the visible viewport. Returns 1 on success, 0 before the map is ready.
+  int comaps_navigation_show_overview(
+    double minLat,
+    double minLon,
+    double maxLat,
+    double maxLon,
+  ) {
+    return _comaps_navigation_show_overview(
+      minLat,
+      minLon,
+      maxLat,
+      maxLon,
+    );
+  }
+
+  late final _comaps_navigation_show_overviewPtr = _lookup<
+      ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Double, ffi.Double, ffi.Double,
+              ffi.Double)>>('comaps_navigation_show_overview');
+  late final _comaps_navigation_show_overview =
+      _comaps_navigation_show_overviewPtr
+          .asFunction<int Function(double, double, double, double)>();
+
+  /// Restarts the engine's 20 s timer that returns route following after a pan.
+  /// Call it every few seconds to hold a route overview.
+  void comaps_navigation_hold_overview() {
+    return _comaps_navigation_hold_overview();
+  }
+
+  late final _comaps_navigation_hold_overviewPtr =
+      _lookup<ffi.NativeFunction<ffi.Void Function()>>(
+          'comaps_navigation_hold_overview');
+  late final _comaps_navigation_hold_overview =
+      _comaps_navigation_hold_overviewPtr.asFunction<void Function()>();
+
   void comaps_navigation_close_route(
     int removeRoutePoints,
   ) {

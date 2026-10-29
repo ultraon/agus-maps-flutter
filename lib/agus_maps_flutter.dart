@@ -1861,6 +1861,42 @@ int? getCurrentZoom() {
   return zoom < 0 ? null : zoom;
 }
 
+/// Stop route following and show the box from ([minLat], [minLon]) to
+/// ([maxLat], [maxLon]), made 1.5 times larger, north-up in the visible
+/// viewport. Returns 1 on success, 0 before the map is ready.
+int showNavigationOverview({
+  required double minLat,
+  required double minLon,
+  required double maxLat,
+  required double maxLon,
+}) {
+  try {
+    return _bindings.comaps_navigation_show_overview(
+      minLat,
+      minLon,
+      maxLat,
+      maxLon,
+    );
+  } on ArgumentError catch (error) {
+    if (kDebugMode) {
+      debugPrint('[AgusMap] Route overview is unavailable: $error');
+    }
+    return -1;
+  }
+}
+
+/// Restart the engine's 20 s timer that returns route following after a pan.
+/// Call it every few seconds while a route overview shows.
+void holdNavigationOverview() {
+  try {
+    _bindings.comaps_navigation_hold_overview();
+  } on ArgumentError catch (error) {
+    if (kDebugMode) {
+      debugPrint('[AgusMap] Route overview hold is unavailable: $error');
+    }
+  }
+}
+
 /// Return the current zoom level with its fraction, or null if unavailable.
 double? getCurrentZoomLevel() {
   final zoom = _bindings.comaps_get_current_zoom_level();

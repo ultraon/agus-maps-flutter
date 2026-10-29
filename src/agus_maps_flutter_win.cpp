@@ -1457,6 +1457,17 @@ FFI_PLUGIN_EXPORT double comaps_get_current_zoom_level(void) {
     return agus::navigation::CurrentZoomLevel(g_framework.get());
 }
 
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_show_overview(
+    double minLat, double minLon, double maxLat, double maxLon) {
+    auto const result = agus::navigation::ShowRouteOverview(g_framework.get(), minLat, minLon, maxLat, maxLon);
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT void comaps_navigation_hold_overview(void) {
+    agus::navigation::HoldRouteOverview(g_framework.get());
+}
+
 FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints) {
     agus::navigation::CloseRoute(g_framework.get(), removeRoutePoints);
     WakeRenderer();
