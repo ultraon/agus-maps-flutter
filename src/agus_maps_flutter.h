@@ -375,9 +375,13 @@ FFI_PLUGIN_EXPORT void comaps_navigation_remove_route_point(
 FFI_PLUGIN_EXPORT void comaps_navigation_clear_route_points(void);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_build_route(void);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route(void);
-// Returns to route following at the navigation zoom. Returns 1 on success,
-// 0 when no route is followed, -1 when the framework is not ready.
-FFI_PLUGIN_EXPORT int32_t comaps_navigation_recenter(void);
+// Starts route following like comaps_navigation_follow_route. For a walking
+// route, a zoom above 0 replaces the engine's walking navigation zoom.
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route_at_zoom(int32_t zoom);
+// Returns to route following at the navigation zoom: [zoom] for a walking
+// route when above 0, else the engine's own. Returns 1 on success, 0 when no
+// route is followed, -1 when the framework is not ready.
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_recenter(int32_t zoom);
 FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_active(void);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_built(void);

@@ -868,17 +868,39 @@ class AgusMapsFlutterBindings {
   late final _comaps_navigation_follow_route =
       _comaps_navigation_follow_routePtr.asFunction<int Function()>();
 
-  /// Returns to route following at the navigation zoom. Returns 1 on success,
-  /// 0 when no route is followed, -1 when the framework is not ready.
-  int comaps_navigation_recenter() {
-    return _comaps_navigation_recenter();
+  /// Starts route following like comaps_navigation_follow_route. For a walking
+  /// route, a zoom above 0 replaces the engine's walking navigation zoom.
+  int comaps_navigation_follow_route_at_zoom(
+    int zoom,
+  ) {
+    return _comaps_navigation_follow_route_at_zoom(
+      zoom,
+    );
+  }
+
+  late final _comaps_navigation_follow_route_at_zoomPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32)>>(
+          'comaps_navigation_follow_route_at_zoom');
+  late final _comaps_navigation_follow_route_at_zoom =
+      _comaps_navigation_follow_route_at_zoomPtr
+          .asFunction<int Function(int)>();
+
+  /// Returns to route following at the navigation zoom: [zoom] for a walking
+  /// route when above 0, else the engine's own. Returns 1 on success, 0 when no
+  /// route is followed, -1 when the framework is not ready.
+  int comaps_navigation_recenter(
+    int zoom,
+  ) {
+    return _comaps_navigation_recenter(
+      zoom,
+    );
   }
 
   late final _comaps_navigation_recenterPtr =
-      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Int32)>>(
           'comaps_navigation_recenter');
   late final _comaps_navigation_recenter =
-      _comaps_navigation_recenterPtr.asFunction<int Function()>();
+      _comaps_navigation_recenterPtr.asFunction<int Function(int)>();
 
   void comaps_navigation_close_route(
     int removeRoutePoints,

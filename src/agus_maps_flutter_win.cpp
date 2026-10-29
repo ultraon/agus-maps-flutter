@@ -1441,8 +1441,14 @@ FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route(void) {
     return result;
 }
 
-FFI_PLUGIN_EXPORT int32_t comaps_navigation_recenter(void) {
-    auto const result = agus::navigation::RecenterRouteFollowing(g_framework.get());
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route_at_zoom(int32_t zoom) {
+    auto const result = agus::navigation::FollowRouteAtZoom(g_framework.get(), zoom);
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_recenter(int32_t zoom) {
+    auto const result = agus::navigation::RecenterRouteFollowing(g_framework.get(), zoom);
     if (result > 0) WakeRenderer();
     return result;
 }

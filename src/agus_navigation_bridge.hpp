@@ -190,9 +190,45 @@ inline int32_t FollowRoute(Framework * framework)
   return framework->GetRoutingManager().IsRoutingFollowing() ? 1 : 0;
 }
 
+// The walking navigation zoom is a compiled engine constant
+// (scales::GetPedestrianNavigationScale). A zoom above 0 replaces it: the
+// engine follows a walking route again with the parameters that
+// Framework::OnRouteFollow uses for walking.
+inline void FollowWalkingRouteAtZoom(Framework * framework, int32_t zoom)
+{
+  auto & routing = framework->GetRoutingManager();
+  auto engine = framework->GetDrapeEngine();
+  if (zoom <= 0 || engine == nullptr || !routing.IsRoutingFollowing() ||
+      routing.GetRouter() != routing::RouterType::Pedestrian)
+    return;
+  engine->DeactivateRouteFollowing();
+  engine->FollowRoute(zoom, zoom, false /* enableAutoZoom */, false /* isArrowGlued */,
+                      false /* allowRouteRotation */);
+}
+
+// A camera move with a zoom cannot be interrupted, so the walking zoom goes
+// first. The activation from RoutingManager::FollowRoute then finds routing
+// active and changes nothing.
+inline int32_t FollowRouteAtZoom(Framework * framework, int32_t zoom)
+{
+  if (framework == nullptr)
+    return -1;
+  auto & routing = framework->GetRoutingManager();
+  auto engine = framework->GetDrapeEngine();
+  bool const ownZoom = zoom > 0 && engine != nullptr && routing.IsRouteBuilt() &&
+                       routing.GetRouter() == routing::RouterType::Pedestrian;
+  if (ownZoom)
+    engine->FollowRoute(zoom, zoom, false /* enableAutoZoom */, false /* isArrowGlued */,
+                        false /* allowRouteRotation */);
+  auto const result = FollowRoute(framework);
+  if (ownZoom && result <= 0)
+    engine->DeactivateRouteFollowing();
+  return result;
+}
+
 // The engine has no call that returns to route following at the navigation
 // zoom: it keeps the user's zoom. Restarting route following sets both.
-inline int32_t RecenterRouteFollowing(Framework * framework)
+inline int32_t RecenterRouteFollowing(Framework * framework, int32_t zoom)
 {
   if (framework == nullptr)
     return -1;
@@ -200,6 +236,11 @@ inline int32_t RecenterRouteFollowing(Framework * framework)
   auto engine = framework->GetDrapeEngine();
   if (!routing.IsRoutingFollowing() || engine == nullptr)
     return 0;
+  if (zoom > 0 && routing.GetRouter() == routing::RouterType::Pedestrian)
+  {
+    FollowWalkingRouteAtZoom(framework, zoom);
+    return 1;
+  }
   engine->DeactivateRouteFollowing();
   routing.FollowRoute();
   return routing.IsRoutingFollowing() ? 1 : 0;

@@ -1047,9 +1047,14 @@ int buildNavigationRoute() {
   }
 }
 
-/// Enter native route-following mode after a route has been built.
-int followNavigationRoute() {
+/// Enter native route-following mode after a route has been built. For a
+/// walking route, a [zoom] above 0 replaces the engine's walking navigation
+/// zoom.
+int followNavigationRoute({int zoom = 0}) {
   try {
+    if (zoom > 0) {
+      return _bindings.comaps_navigation_follow_route_at_zoom(zoom);
+    }
     return _bindings.comaps_navigation_follow_route();
   } on ArgumentError catch (error) {
     if (kDebugMode) {
@@ -1060,10 +1065,12 @@ int followNavigationRoute() {
 }
 
 /// Return to route following at the navigation zoom, after a pan or a zoom
-/// moved the map away. Returns 1 on success, 0 when no route is followed.
-int recenterNavigationRoute() {
+/// moved the map away. For a walking route, a [zoom] above 0 replaces the
+/// engine's walking navigation zoom. Returns 1 on success, 0 when no route is
+/// followed.
+int recenterNavigationRoute({int zoom = 0}) {
   try {
-    return _bindings.comaps_navigation_recenter();
+    return _bindings.comaps_navigation_recenter(zoom);
   } on ArgumentError catch (error) {
     if (kDebugMode) {
       debugPrint('[AgusMap] Recenter route is unavailable: $error');
