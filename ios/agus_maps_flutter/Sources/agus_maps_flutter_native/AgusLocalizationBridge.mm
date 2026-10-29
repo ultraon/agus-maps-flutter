@@ -13,8 +13,11 @@
 #include <unordered_map>
 #include <vector>
 
+#include "agus_type_names.hpp"
+
 #include "platform/localization.hpp"
 #include "platform/measurement_utils.hpp"
+#include "platform/platform.hpp"
 #include "platform/settings.hpp"
 
 // ============================================================================
@@ -26,29 +29,11 @@ std::unordered_map<std::string, std::string> g_typeTranslations;
 std::unordered_map<std::string, std::string> g_stringTranslations;
 std::string g_loadedLocaleTag;
 std::string g_explicitLocaleTag;
+// Locale and resource folder of the last load, so a failed load is not
+// repeated on every call.
+std::string g_attemptedLoadKey;
 
-/// Parse a .strings file into the translation map.
-void ParseStringsFile(
-	std::string const & path,
-	std::unordered_map<std::string, std::string> & translations)
-{
-	@autoreleasepool {
-		NSString * nsPath = [NSString stringWithUTF8String:path.c_str()];
-		NSDictionary * dict = [NSDictionary dictionaryWithContentsOfFile:nsPath];
-		if (!dict) {
-			return;
-		}
-		for (NSString * key in dict) {
-			NSString * value = dict[key];
-			if ([key isKindOfClass:[NSString class]] &&
-				[value isKindOfClass:[NSString class]]) {
-				translations[[key UTF8String]] = [value UTF8String];
-			}
-		}
-	}
-}
-
-/// Get the current locale tag.
+/// Get the current locale tag, e.g. "it-IT" or "zh-Hans-CN".
 std::string GetCurrentLocaleTag()
 {
 	if (!g_explicitLocaleTag.empty()) {
@@ -58,86 +43,50 @@ std::string GetCurrentLocaleTag()
 	@autoreleasepool {
 		NSString * langCode = [[NSLocale preferredLanguages] firstObject];
 		if (langCode) {
-			NSRange dashRange = [langCode rangeOfString:@"-"];
-			if (dashRange.location != NSNotFound) {
-				langCode = [langCode substringToIndex:dashRange.location];
-			}
 			return std::string([langCode UTF8String]);
 		}
 	}
 	return "en";
 }
 
-/// Try to load translations for a given locale.
-bool TryLoadTranslations(std::string const & localeTag)
+/// Path of a strings table in the main bundle, kept for apps that ship
+/// LocalizedStrings/<locale> through the podspec resources.
+std::string MainBundleTablePath(std::string const & localeTag, std::string const & table)
 {
 	@autoreleasepool {
-		NSBundle * mainBundle = [NSBundle mainBundle];
-		NSString * nsLocale = [NSString stringWithUTF8String:localeTag.c_str()];
-
-		NSString * typesPath = [mainBundle
-			pathForResource:@"LocalizableTypes"
+		NSString * path = [[NSBundle mainBundle]
+			pathForResource:@(table.c_str())
 					 ofType:@"strings"
-				inDirectory:[NSString stringWithFormat:
-					@"LocalizedStrings/%@", nsLocale]];
-
-		if (!typesPath) {
-			NSBundle * pluginBundle =
-				[NSBundle bundleForClass:NSClassFromString(@"AgusLocalizationBridge")
-								   ?: [NSBundle mainBundle].class];
-			typesPath = [pluginBundle
-				pathForResource:@"LocalizableTypes"
-						 ofType:@"strings"
-					inDirectory:[NSString stringWithFormat:
-						@"LocalizedStrings/%@", nsLocale]];
-		}
-
-		if (typesPath) {
-			ParseStringsFile([typesPath UTF8String], g_typeTranslations);
-		}
-
-		NSString * stringsPath = [mainBundle
-			pathForResource:@"Localizable"
-					 ofType:@"strings"
-				inDirectory:[NSString stringWithFormat:
-					@"LocalizedStrings/%@", nsLocale]];
-		if (!stringsPath) {
-			NSBundle * pluginBundle =
-				[NSBundle bundleForClass:NSClassFromString(@"AgusLocalizationBridge")
-								   ?: [NSBundle mainBundle].class];
-			stringsPath = [pluginBundle
-				pathForResource:@"Localizable"
-						 ofType:@"strings"
-					inDirectory:[NSString stringWithFormat:
-						@"LocalizedStrings/%@", nsLocale]];
-		}
-
-		if (stringsPath) {
-			ParseStringsFile([stringsPath UTF8String], g_stringTranslations);
-		}
-
-		return !g_typeTranslations.empty() || !g_stringTranslations.empty();
+				inDirectory:[NSString stringWithFormat:@"LocalizedStrings/%s",
+					localeTag.c_str()]];
+		return path ? std::string([path UTF8String]) : std::string();
 	}
 }
 
 /// Ensure translations are loaded for the current locale.
 void EnsureTranslationsLoaded()
 {
-	std::string currentLocale = GetCurrentLocaleTag();
-	if (currentLocale == g_loadedLocaleTag && !g_typeTranslations.empty()) {
+	std::string const currentLocale = GetCurrentLocaleTag();
+	// comaps_init_paths moves the resource folder from the app bundle to the
+	// extracted data, so a lookup before it must not block the later load.
+	std::string const resourcesDir = GetPlatform().ResourcesDir();
+	std::string const loadKey = currentLocale + "|" + resourcesDir;
+	if (loadKey == g_attemptedLoadKey) {
 		return;
 	}
 
+	g_attemptedLoadKey = loadKey;
 	g_typeTranslations.clear();
 	g_stringTranslations.clear();
-
-	if (TryLoadTranslations(currentLocale)) {
-		g_loadedLocaleTag = currentLocale;
-	} else if (currentLocale != "en" && TryLoadTranslations("en")) {
-		g_loadedLocaleTag = "en";
-	} else {
-		g_loadedLocaleTag = currentLocale;
-	}
+	g_loadedLocaleTag = agus_type_names::LoadTables(
+		currentLocale,
+		{
+			[&resourcesDir](std::string const & locale, std::string const & table) {
+				return agus_type_names::LocalizedTablePath(resourcesDir, locale, table);
+			},
+			MainBundleTablePath,
+		},
+		g_typeTranslations, g_stringTranslations);
 }
 
 }  // namespace
@@ -171,15 +120,7 @@ AGUS_WEAK std::string GetLocalizedTypeName(std::string const & type)
 	std::lock_guard<std::mutex> lock(g_mutex);
 	EnsureTranslationsLoaded();
 
-	auto it = g_typeTranslations.find(type);
-	if (it != g_typeTranslations.end()) {
-		return it->second;
-	}
-
-	if (type.rfind("type.", 0) == 0) {
-		return type.substr(5);
-	}
-	return type;
+	return agus_type_names::LookupTypeName(g_typeTranslations, type);
 }
 
 AGUS_WEAK std::string GetLocalizedBrandName(std::string const & brand)
@@ -281,6 +222,7 @@ void agus_localization_set_locale(const char * localeTag)
 	g_typeTranslations.clear();
 	g_stringTranslations.clear();
 	g_loadedLocaleTag.clear();
+	g_attemptedLoadKey.clear();
 }
 
 __attribute__((visibility("default")))
