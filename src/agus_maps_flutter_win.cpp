@@ -1441,6 +1441,16 @@ FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route(void) {
     return result;
 }
 
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_recenter(void) {
+    auto const result = agus::navigation::RecenterRouteFollowing(g_framework.get());
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT double comaps_get_current_zoom_level(void) {
+    return agus::navigation::CurrentZoomLevel(g_framework.get());
+}
+
 FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints) {
     agus::navigation::CloseRoute(g_framework.get(), removeRoutePoints);
     WakeRenderer();

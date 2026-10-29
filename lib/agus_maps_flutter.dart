@@ -1059,6 +1059,19 @@ int followNavigationRoute() {
   }
 }
 
+/// Return to route following at the navigation zoom, after a pan or a zoom
+/// moved the map away. Returns 1 on success, 0 when no route is followed.
+int recenterNavigationRoute() {
+  try {
+    return _bindings.comaps_navigation_recenter();
+  } on ArgumentError catch (error) {
+    if (kDebugMode) {
+      debugPrint('[AgusMap] Recenter route is unavailable: $error');
+    }
+    return -1;
+  }
+}
+
 /// Close native routing and optionally remove route points.
 void closeNavigationRoute({bool removeRoutePoints = true}) {
   try {
@@ -1838,6 +1851,12 @@ void setView(double lat, double lon, int zoom) {
 /// Return the current native draw scale/zoom, or null if unavailable.
 int? getCurrentZoom() {
   final zoom = _bindings.comaps_get_current_zoom();
+  return zoom < 0 ? null : zoom;
+}
+
+/// Return the current zoom level with its fraction, or null if unavailable.
+double? getCurrentZoomLevel() {
+  final zoom = _bindings.comaps_get_current_zoom_level();
   return zoom < 0 ? null : zoom;
 }
 

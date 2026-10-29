@@ -55,6 +55,9 @@ FFI_PLUGIN_EXPORT int comaps_get_viewport_center(double* lat, double* lon);
 // Get the current integer draw scale/zoom level, or -1 when unavailable.
 FFI_PLUGIN_EXPORT int comaps_get_current_zoom(void);
 
+// Get the current zoom level with its fraction, or -1 when unavailable.
+FFI_PLUGIN_EXPORT double comaps_get_current_zoom_level(void);
+
 // Converts physical screen coordinates to WGS84 coordinates using the latest
 // native viewport. Returns 1 when values were written.
 FFI_PLUGIN_EXPORT int comaps_screen_to_latlon(
@@ -372,6 +375,9 @@ FFI_PLUGIN_EXPORT void comaps_navigation_remove_route_point(
 FFI_PLUGIN_EXPORT void comaps_navigation_clear_route_points(void);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_build_route(void);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route(void);
+// Returns to route following at the navigation zoom. Returns 1 on success,
+// 0 when no route is followed, -1 when the framework is not ready.
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_recenter(void);
 FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_active(void);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_built(void);

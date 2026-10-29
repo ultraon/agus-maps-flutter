@@ -184,6 +184,17 @@ class AgusMapsFlutterBindings {
   late final _comaps_get_current_zoom =
       _comaps_get_current_zoomPtr.asFunction<int Function()>();
 
+  /// Get the current zoom level with its fraction, or -1 when unavailable.
+  double comaps_get_current_zoom_level() {
+    return _comaps_get_current_zoom_level();
+  }
+
+  late final _comaps_get_current_zoom_levelPtr =
+      _lookup<ffi.NativeFunction<ffi.Double Function()>>(
+          'comaps_get_current_zoom_level');
+  late final _comaps_get_current_zoom_level =
+      _comaps_get_current_zoom_levelPtr.asFunction<double Function()>();
+
   /// Converts physical screen coordinates to WGS84 coordinates using the latest
   /// native viewport. Returns 1 when values were written.
   int comaps_screen_to_latlon(
@@ -856,6 +867,18 @@ class AgusMapsFlutterBindings {
           'comaps_navigation_follow_route');
   late final _comaps_navigation_follow_route =
       _comaps_navigation_follow_routePtr.asFunction<int Function()>();
+
+  /// Returns to route following at the navigation zoom. Returns 1 on success,
+  /// 0 when no route is followed, -1 when the framework is not ready.
+  int comaps_navigation_recenter() {
+    return _comaps_navigation_recenter();
+  }
+
+  late final _comaps_navigation_recenterPtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function()>>(
+          'comaps_navigation_recenter');
+  late final _comaps_navigation_recenter =
+      _comaps_navigation_recenterPtr.asFunction<int Function()>();
 
   void comaps_navigation_close_route(
     int removeRoutePoints,

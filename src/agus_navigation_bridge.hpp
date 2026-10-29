@@ -2,6 +2,8 @@
 
 #include "agus_maps_flutter.h"
 
+#include "drape_frontend/visual_params.hpp"
+
 #include "map/framework.hpp"
 #include "map/routing_mark.hpp"
 #include "platform/distance.hpp"
@@ -186,6 +188,34 @@ inline int32_t FollowRoute(Framework * framework)
   EnsureRoutingCallbacks(framework);
   framework->GetRoutingManager().FollowRoute();
   return framework->GetRoutingManager().IsRoutingFollowing() ? 1 : 0;
+}
+
+// The engine has no call that returns to route following at the navigation
+// zoom: it keeps the user's zoom. Restarting route following sets both.
+inline int32_t RecenterRouteFollowing(Framework * framework)
+{
+  if (framework == nullptr)
+    return -1;
+  auto & routing = framework->GetRoutingManager();
+  auto engine = framework->GetDrapeEngine();
+  if (!routing.IsRoutingFollowing() || engine == nullptr)
+    return 0;
+  engine->DeactivateRouteFollowing();
+  routing.FollowRoute();
+  return routing.IsRoutingFollowing() ? 1 : 0;
+}
+
+// The framework keeps its screen private, so the scale comes from the length
+// of a pixel row in Mercator units.
+inline double CurrentZoomLevel(Framework * framework)
+{
+  if (framework == nullptr || framework->GetDrapeEngine() == nullptr)
+    return -1;
+  double constexpr kRowPixels = 256;
+  double const scale = framework->PtoG({kRowPixels, 0}).Length(framework->PtoG({0, 0})) / kRowPixels;
+  if (!(scale > 0))
+    return -1;
+  return df::GetZoomLevel(scale);
 }
 
 inline void CloseRoute(Framework * framework, int32_t removeRoutePoints)
