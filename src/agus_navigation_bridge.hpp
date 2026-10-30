@@ -23,6 +23,9 @@
 #include "geometry/latlon.hpp"
 #include "geometry/mercator.hpp"
 #include "geometry/point_with_altitude.hpp"
+#include "geometry/screenbase.hpp"
+
+#include "base/math.hpp"
 
 #include <algorithm>
 #include <cstdlib>
@@ -246,6 +249,49 @@ inline int32_t RecenterRouteFollowing(Framework * framework, int32_t zoom)
   return routing.IsRoutingFollowing() ? 1 : 0;
 }
 
+// The tilt in degrees that the app last set, or -1 for the engine's own tilt.
+// The engine keeps its copy on the render thread, so the shim keeps this one
+// to answer reads.
+inline double g_userPerspectiveDegrees = -1;
+
+// The largest tilt is the one the engine's own tilt reaches at a street zoom.
+inline double MaxPerspectiveAngle()
+{
+  return ScreenBase::CalculateAutoPerspectiveAngle(0.0 /* scale */) * 180.0 / math::pi;
+}
+
+// A negative angle returns to the tilt that the engine picks from the zoom.
+inline int32_t SetPerspectiveAngle(Framework * framework, double degrees)
+{
+  if (framework == nullptr)
+    return -1;
+  auto engine = framework->GetDrapeEngine();
+  if (engine == nullptr)
+    return 0;
+  g_userPerspectiveDegrees = degrees < 0 ? -1 : std::min(degrees, MaxPerspectiveAngle());
+  engine->SetPerspectiveAngle(degrees < 0 ? -1 : g_userPerspectiveDegrees * math::pi / 180.0);
+  return 1;
+}
+
+// Without a tilt from the app, the angle is the engine's own tilt for the
+// current zoom while a route is followed in 3D, else 0.
+inline double PerspectiveAngle(Framework * framework)
+{
+  if (g_userPerspectiveDegrees >= 0)
+    return g_userPerspectiveDegrees;
+  if (framework == nullptr || framework->GetDrapeEngine() == nullptr ||
+      !framework->GetRoutingManager().IsRoutingFollowing())
+    return 0;
+  bool allow3d = false;
+  bool allow3dBuildings = false;
+  framework->Load3dMode(allow3d, allow3dBuildings);
+  if (!allow3d)
+    return 0;
+  double constexpr kRowPixels = 256;
+  double const scale = framework->PtoG({kRowPixels, 0}).Length(framework->PtoG({0, 0})) / kRowPixels;
+  return ScreenBase::CalculateAutoPerspectiveAngle(scale) * 180.0 / math::pi;
+}
+
 // The margin around a route overview, the same as after a route build
 // (kRouteScaleMultiplier in RoutingManager).
 double constexpr kRouteOverviewMargin = 1.5;
@@ -265,6 +311,10 @@ inline int32_t ShowRouteOverview(Framework * framework, double minLat, double mi
   rect.Add(mercator::FromLatLon(maxLat, maxLon));
   rect.Scale(kRouteOverviewMargin);
   engine->StopLocationFollow();
+  // The app's tilt would show the zoomed-out box at a slant. The engine keeps
+  // that tilt and applies it again when route following resumes.
+  if (g_userPerspectiveDegrees >= 0)
+    engine->EnablePerspective();
   // The plain rect path clamps a tiny box to the engine's scale limits; no
   // rotation keeps the map north-up.
   engine->SetModelViewRect(rect, false /* applyRotation */, -1 /* zoom */, true /* isAnim */,

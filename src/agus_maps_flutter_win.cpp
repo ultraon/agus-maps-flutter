@@ -1468,6 +1468,20 @@ FFI_PLUGIN_EXPORT void comaps_navigation_hold_overview(void) {
     agus::navigation::HoldRouteOverview(g_framework.get());
 }
 
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_set_perspective_angle(double degrees) {
+    auto const result = agus::navigation::SetPerspectiveAngle(g_framework.get(), degrees);
+    if (result > 0) WakeRenderer();
+    return result;
+}
+
+FFI_PLUGIN_EXPORT double comaps_navigation_get_perspective_angle(void) {
+    return agus::navigation::PerspectiveAngle(g_framework.get());
+}
+
+FFI_PLUGIN_EXPORT double comaps_navigation_get_max_perspective_angle(void) {
+    return agus::navigation::MaxPerspectiveAngle();
+}
+
 FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints) {
     agus::navigation::CloseRoute(g_framework.get(), removeRoutePoints);
     WakeRenderer();

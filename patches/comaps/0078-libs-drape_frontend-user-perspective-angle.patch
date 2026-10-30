@@ -1,0 +1,243 @@
+diff --git a/libs/drape_frontend/drape_engine.cpp b/libs/drape_frontend/drape_engine.cpp
+--- a/libs/drape_frontend/drape_engine.cpp
++++ b/libs/drape_frontend/drape_engine.cpp
+@@ -722,6 +722,12 @@
+                                   MessagePriority::Normal);
+ }
+ 
++void DrapeEngine::SetPerspectiveAngle(double angle)
++{
++  m_threadCommutator->PostMessage(ThreadsCommutator::RenderThread, make_unique_dp<SetPerspectiveAngleMessage>(angle),
++                                  MessagePriority::Normal);
++}
++
+ void DrapeEngine::UpdateGpsTrackPoints(std::vector<df::GpsTrackPoint> && toAdd, std::vector<uint32_t> && toRemove)
+ {
+   m_threadCommutator->PostMessage(ThreadsCommutator::RenderThread,
+diff --git a/libs/drape_frontend/drape_engine.hpp b/libs/drape_frontend/drape_engine.hpp
+--- a/libs/drape_frontend/drape_engine.hpp
++++ b/libs/drape_frontend/drape_engine.hpp
+@@ -209,6 +209,9 @@
+ 
+   void Allow3dMode(bool allowPerspectiveInNavigation, bool allow3dBuildings);
+   void EnablePerspective();
++  // The map tilt in radians while a route is followed in 3D. A negative angle
++  // returns to the tilt that the engine picks from the zoom.
++  void SetPerspectiveAngle(double angle);
+ 
+   void UpdateGpsTrackPoints(std::vector<df::GpsTrackPoint> && toAdd, std::vector<uint32_t> && toRemove);
+   void ClearGpsTrackPoints();
+diff --git a/libs/drape_frontend/frontend_renderer.cpp b/libs/drape_frontend/frontend_renderer.cpp
+--- a/libs/drape_frontend/frontend_renderer.cpp
++++ b/libs/drape_frontend/frontend_renderer.cpp
+@@ -703,6 +703,22 @@
+     break;
+   }
+ 
++  case Message::Type::SetPerspectiveAngle:
++  {
++    ref_ptr<SetPerspectiveAngleMessage> const msg = message;
++    if (msg->GetAngle() < 0.0)
++    {
++      m_userPerspectiveAngle.reset();
++      if (m_enablePerspectiveInNavigation && m_myPositionController->IsInRouting())
++        AddUserEvent(make_unique_dp<SetAutoPerspectiveEvent>(true /* isAutoPerspective */));
++      break;
++    }
++    m_userPerspectiveAngle = msg->GetAngle();
++    if (m_enablePerspectiveInNavigation && m_myPositionController->IsInRouting())
++      AddUserEvent(make_unique_dp<SetPerspectiveAngleEvent>(*m_userPerspectiveAngle));
++    break;
++  }
++
+   case Message::Type::Allow3dMode:
+   {
+     ref_ptr<Allow3dModeMessage> const msg = message;
+@@ -1130,7 +1146,11 @@
+       allowRouteRotation);
+ 
+   if (m_enablePerspectiveInNavigation)
++  {
+     AddUserEvent(make_unique_dp<SetAutoPerspectiveEvent>(true /* isAutoPerspective */));
++    if (m_userPerspectiveAngle)
++      AddUserEvent(make_unique_dp<SetPerspectiveAngleEvent>(*m_userPerspectiveAngle));
++  }
+ 
+   m_routeRenderer->SetFollowingEnabled(true);
+   CHECK(m_context != nullptr, ());
+diff --git a/libs/drape_frontend/frontend_renderer.hpp b/libs/drape_frontend/frontend_renderer.hpp
+--- a/libs/drape_frontend/frontend_renderer.hpp
++++ b/libs/drape_frontend/frontend_renderer.hpp
+@@ -357,6 +357,8 @@
+   FrameValues m_frameValues;
+ 
+   bool m_enablePerspectiveInNavigation;
++  // The user's tilt in radians; following a route again keeps it.
++  std::optional<double> m_userPerspectiveAngle;
+   bool m_enable3dBuildings;
+   bool m_isIsometry;
+ 
+diff --git a/libs/drape_frontend/message.cpp b/libs/drape_frontend/message.cpp
+--- a/libs/drape_frontend/message.cpp
++++ b/libs/drape_frontend/message.cpp
+@@ -106,6 +106,7 @@
+   case Message::Type::OnEnterBackground: return "OnEnterBackground";
+   case Message::Type::Arrow3dRecache: return "Arrow3dRecache";
+   case Message::Type::VisualScaleChanged: return "VisualScaleChanged";
++  case Message::Type::SetPerspectiveAngle: return "SetPerspectiveAngle";
+   }
+   ASSERT(false, ("Unknown message type."));
+   return "Unknown type";
+diff --git a/libs/drape_frontend/message.hpp b/libs/drape_frontend/message.hpp
+--- a/libs/drape_frontend/message.hpp
++++ b/libs/drape_frontend/message.hpp
+@@ -107,6 +107,7 @@
+     OnEnterBackground,
+     Arrow3dRecache,
+     VisualScaleChanged,
++    SetPerspectiveAngle,
+   };
+ 
+   virtual ~Message() = default;
+diff --git a/libs/drape_frontend/message_subclasses.hpp b/libs/drape_frontend/message_subclasses.hpp
+--- a/libs/drape_frontend/message_subclasses.hpp
++++ b/libs/drape_frontend/message_subclasses.hpp
+@@ -899,6 +899,20 @@
+   Type GetType() const override { return Type::EnablePerspective; }
+ };
+ 
++// A negative angle returns to the angle that the engine picks from the zoom.
++class SetPerspectiveAngleMessage : public Message
++{
++public:
++  explicit SetPerspectiveAngleMessage(double angle) : m_angle(angle) {}
++
++  Type GetType() const override { return Type::SetPerspectiveAngle; }
++
++  double GetAngle() const { return m_angle; }
++
++private:
++  double const m_angle;
++};
++
+ class CacheCirclesPackMessage : public Message
+ {
+ public:
+diff --git a/libs/drape_frontend/navigator.cpp b/libs/drape_frontend/navigator.cpp
+--- a/libs/drape_frontend/navigator.cpp
++++ b/libs/drape_frontend/navigator.cpp
+@@ -12,6 +12,8 @@
+ #include "base/math.hpp"
+ #include "base/matrix.hpp"
+ 
++#include <algorithm>
++
+ namespace df
+ {
+ double constexpr kDefault3dScale = 1.0;
+@@ -305,6 +307,22 @@
+     m_Screen.ResetPerspective();
+ }
+ 
++void Navigator::SetPerspectiveAngle(double angle)
++{
++  double const maxAngle = ScreenBase::CalculateAutoPerspectiveAngle(0.0 /* scale */);
++  if (angle <= 0.0)
++  {
++    Disable3dMode();
++    m_Screen.SetAutoPerspective(false);
++    return;
++  }
++  angle = std::min(angle, maxAngle);
++  if (m_Screen.isPerspective() && !m_Screen.isAutoPerspective() && m_Screen.GetMaxRotationAngle() == maxAngle)
++    m_Screen.SetRotationAngle(angle);
++  else
++    m_Screen.ApplyPerspective(angle, maxAngle, m_Screen.GetAngleFOV());
++}
++
+ m2::AnyRectD ToRotated(Navigator const & navigator, m2::RectD const & rect)
+ {
+   double const dx = rect.SizeX();
+diff --git a/libs/drape_frontend/navigator.hpp b/libs/drape_frontend/navigator.hpp
+--- a/libs/drape_frontend/navigator.hpp
++++ b/libs/drape_frontend/navigator.hpp
+@@ -47,6 +47,8 @@
+   void Enable3dMode();
+   void SetRotationIn3dMode(double rotationAngle);
+   void Disable3dMode();
++  // Turns off the auto tilt. The largest tilt is the one the auto tilt reaches.
++  void SetPerspectiveAngle(double angle);
+ 
+ private:
+   // Internal screen corresponding to the state when navigation began with StartDrag or StartScale.
+diff --git a/libs/drape_frontend/user_event_stream.cpp b/libs/drape_frontend/user_event_stream.cpp
+--- a/libs/drape_frontend/user_event_stream.cpp
++++ b/libs/drape_frontend/user_event_stream.cpp
+@@ -278,6 +278,14 @@
+       activeFrame = true;
+     }
+     break;
++    case UserEvent::EventType::PerspectiveAngle:
++    {
++      m_needTrackCenter = false;
++      ref_ptr<SetPerspectiveAngleEvent> angleEvent = make_ref(e);
++      SetPerspectiveAngle(angleEvent->GetAngle());
++      m_modelViewChanged = true;
++    }
++    break;
+     default: ASSERT(false, ()); break;
+     }
+ 
+@@ -692,6 +700,11 @@
+   m_navigator.SetAutoPerspective(isAutoPerspective);
+ }
+ 
++void UserEventStream::SetPerspectiveAngle(double angle)
++{
++  m_navigator.SetPerspectiveAngle(angle);
++}
++
+ void UserEventStream::ResetAnimations(Animation::Type animType, bool rewind, bool finishAll)
+ {
+   bool const hasAnimations = m_animationSystem.HasAnimations();
+diff --git a/libs/drape_frontend/user_event_stream.hpp b/libs/drape_frontend/user_event_stream.hpp
+--- a/libs/drape_frontend/user_event_stream.hpp
++++ b/libs/drape_frontend/user_event_stream.hpp
+@@ -46,7 +46,8 @@
+     VisibleViewport,
+     Move,
+     Scroll,
+-    ActiveFrame
++    ActiveFrame,
++    PerspectiveAngle
+   };
+ 
+   virtual ~UserEvent() = default;
+@@ -322,6 +323,19 @@
+   bool m_isAutoPerspective;
+ };
+ 
++class SetPerspectiveAngleEvent : public UserEvent
++{
++public:
++  explicit SetPerspectiveAngleEvent(double angle) : m_angle(angle) {}
++
++  EventType GetType() const override { return UserEvent::EventType::PerspectiveAngle; }
++
++  double GetAngle() const { return m_angle; }
++
++private:
++  double m_angle;
++};
++
+ class RotateEvent : public UserEvent
+ {
+ public:
+@@ -488,6 +502,7 @@
+                           Animation::TAction const & onFinishAction = nullptr,
+                           TAnimationCreator const & parallelAnimCreator = nullptr);
+   void SetAutoPerspective(bool isAutoPerspective);
++  void SetPerspectiveAngle(double angle);
+ 
+   m2::AnyRectD GetCurrentRect() const;
+ 

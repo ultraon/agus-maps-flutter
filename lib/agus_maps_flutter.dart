@@ -13,10 +13,12 @@ import 'package:path/path.dart' as p;
 import 'src/agus_maps_api.g.dart';
 
 import 'agus_maps_flutter_bindings_generated.dart';
+import 'src/two_finger_tilt.dart';
 
 // Export additional services
 export 'mwm_storage.dart';
 export 'mirror_service.dart';
+export 'src/two_finger_tilt.dart';
 export 'src/agus_maps_api.g.dart'
     show
         DrapeInteractionGeometryRequest,
@@ -1897,6 +1899,47 @@ void holdNavigationOverview() {
   }
 }
 
+/// Set the map tilt in [degrees] while a route is followed in 3D. The engine
+/// keeps the tilt when route following resumes. A negative angle returns to
+/// the tilt that the engine picks from the zoom. Returns 1 on success, 0
+/// before the map is ready, -1 when unavailable.
+int setNavigationPerspectiveAngle(double degrees) {
+  try {
+    return _bindings.comaps_navigation_set_perspective_angle(degrees);
+  } on ArgumentError catch (error) {
+    if (kDebugMode) {
+      debugPrint('[AgusMap] Map tilt is unavailable: $error');
+    }
+    return -1;
+  }
+}
+
+/// The tilt in degrees that the app set, else the engine's own tilt for the
+/// current zoom while a route is followed in 3D, else 0. Null when
+/// unavailable.
+double? getNavigationPerspectiveAngle() {
+  try {
+    return _bindings.comaps_navigation_get_perspective_angle();
+  } on ArgumentError catch (error) {
+    if (kDebugMode) {
+      debugPrint('[AgusMap] Map tilt read is unavailable: $error');
+    }
+    return null;
+  }
+}
+
+/// The largest map tilt in degrees, or null when unavailable.
+double? getNavigationMaxPerspectiveAngle() {
+  try {
+    return _bindings.comaps_navigation_get_max_perspective_angle();
+  } on ArgumentError catch (error) {
+    if (kDebugMode) {
+      debugPrint('[AgusMap] Map tilt limit is unavailable: $error');
+    }
+    return null;
+  }
+}
+
 /// Return the current zoom level with its fraction, or null if unavailable.
 double? getCurrentZoomLevel() {
   final zoom = _bindings.comaps_get_current_zoom_level();
@@ -2550,6 +2593,11 @@ class AgusMap extends StatefulWidget {
   /// Policy for native surface resizing when Flutter layout changes.
   final AgusMapResizePolicy resizePolicy;
 
+  /// Whether two fingers that move up or down together tilt the map with
+  /// [setNavigationPerspectiveAngle] instead of zooming it. The engine applies
+  /// the tilt only while a route is followed in 3D.
+  final bool tiltGestureEnabled;
+
   const AgusMap({
     super.key,
     this.initialLat,
@@ -2566,6 +2614,7 @@ class AgusMap extends StatefulWidget {
     this.isVisible = true,
     this.userScale = 1.0,
     this.resizePolicy = AgusMapResizePolicy.stableViewport,
+    this.tiltGestureEnabled = false,
   });
 
   @override
@@ -2923,6 +2972,12 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
   final Set<int> _editorCapturedPointers = <int>{};
   bool _hadMultiplePointers = false;
 
+  static const TwoFingerTiltDetector _tiltDetector = TwoFingerTiltDetector();
+  TwoFingerGesture? _twoFingerGesture;
+  Map<int, Offset> _twoFingerStarts = const {};
+  double _tiltStartAngle = 0;
+  double _tiltMaxAngle = 0;
+
   static const double _tapSlop = 8.0;
   static const Duration _tapTimeout = Duration(milliseconds: 350);
 
@@ -2939,12 +2994,71 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
       return;
     }
 
+    if (_twoFingerGesture == TwoFingerGesture.tilt) return;
     _activePointers[event.pointer] = event.localPosition;
     _tapStates[event.pointer] = _TapState(event.localPosition, event.timeStamp);
     if (_activePointers.length > 1) {
       _hadMultiplePointers = true;
     }
+    _startTwoFingerGesture();
     _sendTouchEvent(TouchType.down, event.pointer, event.localPosition);
+  }
+
+  void _startTwoFingerGesture() {
+    if (!widget.tiltGestureEnabled) return;
+    if (_activePointers.length == 2 && _twoFingerGesture == null) {
+      _twoFingerGesture = TwoFingerGesture.undecided;
+      _twoFingerStarts = Map.of(_activePointers);
+    } else if (_activePointers.length > 2) {
+      _twoFingerGesture = TwoFingerGesture.pinch;
+    }
+  }
+
+  /// Returns true when the move belongs to a tilt, or to a two-finger
+  /// gesture that is not decided yet, so the engine must not see it.
+  bool _handleTwoFingerMove() {
+    final gesture = _twoFingerGesture;
+    if (gesture == null || gesture == TwoFingerGesture.pinch) return false;
+    final ids = _twoFingerStarts.keys.toList();
+    final now1 = _activePointers[ids[0]];
+    final now2 = _activePointers[ids[1]];
+    if (now1 == null || now2 == null) return gesture == TwoFingerGesture.tilt;
+    final start1 = _twoFingerStarts[ids[0]]!;
+    final start2 = _twoFingerStarts[ids[1]]!;
+    if (gesture == TwoFingerGesture.undecided) {
+      final decided = _tiltDetector.classify(
+        start1: start1,
+        start2: start2,
+        now1: now1,
+        now2: now2,
+      );
+      if (decided == TwoFingerGesture.undecided) return true;
+      _twoFingerGesture = decided;
+      if (decided == TwoFingerGesture.pinch) return false;
+      // The engine began a pinch when the second finger went down.
+      _sendTouchEvent(TouchType.cancel, ids[0], now1);
+      _tiltStartAngle = getNavigationPerspectiveAngle() ?? 0;
+      _tiltMaxAngle = getNavigationMaxPerspectiveAngle() ?? 0;
+    }
+    final dragDy = ((now1.dy - start1.dy) + (now2.dy - start2.dy)) / 2;
+    setNavigationPerspectiveAngle(
+      tiltAngleForDrag(
+        startAngle: _tiltStartAngle,
+        dragDy: dragDy,
+        maxAngle: _tiltMaxAngle,
+      ),
+    );
+    return true;
+  }
+
+  /// Returns true when the engine must not see this up or cancel event,
+  /// because it already ended the tilt's touches.
+  bool _endTwoFingerPointer() {
+    final inTilt = _twoFingerGesture == TwoFingerGesture.tilt;
+    if (_activePointers.length - 1 < 2 && !inTilt) {
+      _twoFingerGesture = null;
+    }
+    return inTilt;
   }
 
   void _handlePointerMove(PointerMoveEvent event) {
@@ -2953,6 +3067,10 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
       return;
     }
 
+    if (_twoFingerGesture == TwoFingerGesture.tilt &&
+        !_activePointers.containsKey(event.pointer)) {
+      return;
+    }
     _activePointers[event.pointer] = event.localPosition;
     final tap = _tapStates[event.pointer];
     if (tap != null) {
@@ -2963,7 +3081,9 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
     }
     final isPrimaryMouseDrag = event.kind == PointerDeviceKind.mouse &&
         (event.buttons & kPrimaryMouseButton) != 0;
-    if (Platform.isWindows &&
+    if (_handleTwoFingerMove()) {
+      // A tilt or an undecided two-finger gesture.
+    } else if (Platform.isWindows &&
         isPrimaryMouseDrag &&
         _activePointers.length == 1) {
       final pixelRatio = _devicePixelRatio;
@@ -2985,11 +3105,15 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
       return;
     }
 
-    _sendTouchEvent(TouchType.up, event.pointer, event.localPosition);
+    if (!_activePointers.containsKey(event.pointer)) return;
+    if (!_endTwoFingerPointer()) {
+      _sendTouchEvent(TouchType.up, event.pointer, event.localPosition);
+    }
     final tap = _tapStates.remove(event.pointer);
     _activePointers.remove(event.pointer);
 
     if (_activePointers.isEmpty) {
+      _twoFingerGesture = null;
       if (tap != null &&
           !tap.moved &&
           !_hadMultiplePointers &&
@@ -3010,10 +3134,14 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
       return;
     }
 
-    _sendTouchEvent(TouchType.cancel, event.pointer, event.localPosition);
+    if (!_activePointers.containsKey(event.pointer)) return;
+    if (!_endTwoFingerPointer()) {
+      _sendTouchEvent(TouchType.cancel, event.pointer, event.localPosition);
+    }
     _activePointers.remove(event.pointer);
     _tapStates.remove(event.pointer);
     if (_activePointers.isEmpty) {
+      _twoFingerGesture = null;
       _hadMultiplePointers = false;
       _tapStates.clear();
     }

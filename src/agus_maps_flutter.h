@@ -389,6 +389,16 @@ FFI_PLUGIN_EXPORT int32_t comaps_navigation_show_overview(
 // Restarts the engine's 20 s timer that returns route following after a pan.
 // Call it every few seconds to hold a route overview.
 FFI_PLUGIN_EXPORT void comaps_navigation_hold_overview(void);
+// Sets the map tilt in degrees while a route is followed in 3D. The engine
+// keeps the tilt when route following resumes. A negative angle returns to the
+// tilt that the engine picks from the zoom. Returns 1 on success, 0 before the
+// map is ready, -1 when the framework is not ready.
+FFI_PLUGIN_EXPORT int32_t comaps_navigation_set_perspective_angle(double degrees);
+// The tilt in degrees that the app set, else the engine's own tilt for the
+// current zoom while a route is followed in 3D, else 0.
+FFI_PLUGIN_EXPORT double comaps_navigation_get_perspective_angle(void);
+// The largest tilt in degrees.
+FFI_PLUGIN_EXPORT double comaps_navigation_get_max_perspective_angle(void);
 FFI_PLUGIN_EXPORT void comaps_navigation_close_route(int32_t removeRoutePoints);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_active(void);
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_is_built(void);

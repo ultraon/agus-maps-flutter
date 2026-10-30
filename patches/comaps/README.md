@@ -1561,3 +1561,25 @@ CoMaps keeps one classificator and one set of drawing rules per map style. Since
 
 **Without this patch:**
 - A switch between the light and dark map theme, or outdoors on or off, while tiles load can crash the app with SIGSEGV.
+
+
+### 0078-libs-drape_frontend-user-perspective-angle.patch
+
+**Files Modified:** `libs/drape_frontend/drape_engine.cpp`, `drape_engine.hpp`, `frontend_renderer.cpp`, `frontend_renderer.hpp`, `message.cpp`, `message.hpp`, `message_subclasses.hpp`, `navigator.cpp`, `navigator.hpp`, `user_event_stream.cpp`, `user_event_stream.hpp`
+
+**Category:** Navigation / Map Tilt
+
+**Purpose:** Lets the app set the map tilt (the perspective angle) while a route is followed in 3D.
+
+**What it does:**
+- `DrapeEngine::SetPerspectiveAngle(angle)` posts a new `SetPerspectiveAngleMessage` to the render thread. The angle is in radians.
+- `FrontendRenderer` stores the angle and adds a `SetPerspectiveAngleEvent` while routing is active and perspective in navigation is allowed.
+- `Navigator::SetPerspectiveAngle` turns off the auto tilt and applies the angle. The largest angle is the one the auto tilt reaches at a street zoom (`CalculateAutoPerspectiveAngle(0)`, about 54 degrees). An angle of 0 shows the map flat.
+- `FrontendRenderer::FollowRoute` applies the stored angle again after the auto tilt, so a recenter and a new follow keep the user's tilt.
+- A negative angle drops the stored angle and returns to the auto tilt.
+
+**Why it's needed:**
+CoMaps has no tilt gesture and no call that sets a tilt. In navigation the auto tilt picks the angle from the zoom on every camera update. A tilt that the app sets once is lost at the next follow.
+
+**Without this patch:**
+- The app cannot offer a two-finger tilt gesture in navigation.

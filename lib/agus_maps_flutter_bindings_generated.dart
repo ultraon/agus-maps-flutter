@@ -938,6 +938,50 @@ class AgusMapsFlutterBindings {
   late final _comaps_navigation_hold_overview =
       _comaps_navigation_hold_overviewPtr.asFunction<void Function()>();
 
+  /// Sets the map tilt in degrees while a route is followed in 3D. The engine
+  /// keeps the tilt when route following resumes. A negative angle returns to the
+  /// tilt that the engine picks from the zoom. Returns 1 on success, 0 before the
+  /// map is ready, -1 when the framework is not ready.
+  int comaps_navigation_set_perspective_angle(
+    double degrees,
+  ) {
+    return _comaps_navigation_set_perspective_angle(
+      degrees,
+    );
+  }
+
+  late final _comaps_navigation_set_perspective_anglePtr =
+      _lookup<ffi.NativeFunction<ffi.Int32 Function(ffi.Double)>>(
+          'comaps_navigation_set_perspective_angle');
+  late final _comaps_navigation_set_perspective_angle =
+      _comaps_navigation_set_perspective_anglePtr
+          .asFunction<int Function(double)>();
+
+  /// The tilt in degrees that the app set, else the engine's own tilt for the
+  /// current zoom while a route is followed in 3D, else 0.
+  double comaps_navigation_get_perspective_angle() {
+    return _comaps_navigation_get_perspective_angle();
+  }
+
+  late final _comaps_navigation_get_perspective_anglePtr =
+      _lookup<ffi.NativeFunction<ffi.Double Function()>>(
+          'comaps_navigation_get_perspective_angle');
+  late final _comaps_navigation_get_perspective_angle =
+      _comaps_navigation_get_perspective_anglePtr
+          .asFunction<double Function()>();
+
+  /// The largest tilt in degrees.
+  double comaps_navigation_get_max_perspective_angle() {
+    return _comaps_navigation_get_max_perspective_angle();
+  }
+
+  late final _comaps_navigation_get_max_perspective_anglePtr =
+      _lookup<ffi.NativeFunction<ffi.Double Function()>>(
+          'comaps_navigation_get_max_perspective_angle');
+  late final _comaps_navigation_get_max_perspective_angle =
+      _comaps_navigation_get_max_perspective_anglePtr
+          .asFunction<double Function()>();
+
   void comaps_navigation_close_route(
     int removeRoutePoints,
   ) {
