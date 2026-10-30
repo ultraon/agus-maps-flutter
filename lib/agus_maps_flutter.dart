@@ -3000,17 +3000,38 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
     if (_activePointers.length > 1) {
       _hadMultiplePointers = true;
     }
-    _startTwoFingerGesture();
+    if (_startTwoFingerGesture()) return;
     _sendTouchEvent(TouchType.down, event.pointer, event.localPosition);
   }
 
-  void _startTwoFingerGesture() {
-    if (!widget.tiltGestureEnabled) return;
+  /// Returns true when the engine must not see the second finger yet.
+  ///
+  /// CoMaps treats two fingers that go down together as a two-finger tap
+  /// until they move, and a cancel does not end that state. So the second
+  /// finger reaches the engine only once the gesture is a pinch.
+  bool _startTwoFingerGesture() {
+    if (!widget.tiltGestureEnabled) return false;
     if (_activePointers.length == 2 && _twoFingerGesture == null) {
       _twoFingerGesture = TwoFingerGesture.undecided;
       _twoFingerStarts = Map.of(_activePointers);
-    } else if (_activePointers.length > 2) {
+      return true;
+    }
+    if (_activePointers.length > 2) {
+      _releaseSecondFinger();
       _twoFingerGesture = TwoFingerGesture.pinch;
+    }
+    return false;
+  }
+
+  /// Sends the held-back second finger to the engine, which then starts its
+  /// own two-finger gesture.
+  void _releaseSecondFinger() {
+    if (_twoFingerGesture != TwoFingerGesture.undecided) return;
+    _twoFingerGesture = TwoFingerGesture.pinch;
+    final second = _twoFingerStarts.keys.last;
+    final position = _activePointers[second];
+    if (position != null) {
+      _sendTouchEvent(TouchType.down, second, position);
     }
   }
 
@@ -3033,10 +3054,19 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
         now2: now2,
       );
       if (decided == TwoFingerGesture.undecided) return true;
+      if (decided == TwoFingerGesture.pinch) {
+        _releaseSecondFinger();
+        return false;
+      }
       _twoFingerGesture = decided;
-      if (decided == TwoFingerGesture.pinch) return false;
-      // The engine began a pinch when the second finger went down.
-      _sendTouchEvent(TouchType.cancel, ids[0], now1);
+      // The engine knows only the first finger: end its tap or drag.
+      final pixelRatio = _devicePixelRatio;
+      sendTouchEvent(
+        TouchType.cancel,
+        ids[0],
+        now1.dx * pixelRatio,
+        now1.dy * pixelRatio,
+      );
       _tiltStartAngle = getNavigationPerspectiveAngle() ?? 0;
       _tiltMaxAngle = getNavigationMaxPerspectiveAngle() ?? 0;
     }
@@ -3054,6 +3084,7 @@ class _AgusMapState extends State<AgusMap> with WidgetsBindingObserver {
   /// Returns true when the engine must not see this up or cancel event,
   /// because it already ended the tilt's touches.
   bool _endTwoFingerPointer() {
+    _releaseSecondFinger();
     final inTilt = _twoFingerGesture == TwoFingerGesture.tilt;
     if (_activePointers.length - 1 < 2 && !inTilt) {
       _twoFingerGesture = null;
