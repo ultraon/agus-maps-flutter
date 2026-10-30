@@ -1,13 +1,14 @@
 diff --git a/libs/drape_frontend/drape_engine.cpp b/libs/drape_frontend/drape_engine.cpp
 --- a/libs/drape_frontend/drape_engine.cpp
 +++ b/libs/drape_frontend/drape_engine.cpp
-@@ -722,6 +722,12 @@
+@@ -722,6 +722,13 @@
                                    MessagePriority::Normal);
  }
  
-+void DrapeEngine::SetPerspectiveAngle(double angle)
++void DrapeEngine::SetPerspectiveAngle(double angle, bool isTemporary)
 +{
-+  m_threadCommutator->PostMessage(ThreadsCommutator::RenderThread, make_unique_dp<SetPerspectiveAngleMessage>(angle),
++  m_threadCommutator->PostMessage(ThreadsCommutator::RenderThread,
++                                  make_unique_dp<SetPerspectiveAngleMessage>(angle, isTemporary),
 +                                  MessagePriority::Normal);
 +}
 +
@@ -17,26 +18,33 @@ diff --git a/libs/drape_frontend/drape_engine.cpp b/libs/drape_frontend/drape_en
 diff --git a/libs/drape_frontend/drape_engine.hpp b/libs/drape_frontend/drape_engine.hpp
 --- a/libs/drape_frontend/drape_engine.hpp
 +++ b/libs/drape_frontend/drape_engine.hpp
-@@ -209,6 +209,9 @@
+@@ -209,6 +209,10 @@
  
    void Allow3dMode(bool allowPerspectiveInNavigation, bool allow3dBuildings);
    void EnablePerspective();
 +  // The map tilt in radians while a route is followed in 3D. A negative angle
-+  // returns to the tilt that the engine picks from the zoom.
-+  void SetPerspectiveAngle(double angle);
++  // returns to the tilt that the engine picks from the zoom. A temporary tilt,
++  // such as a flat route overview, ends at the next route follow.
++  void SetPerspectiveAngle(double angle, bool isTemporary = false);
  
    void UpdateGpsTrackPoints(std::vector<df::GpsTrackPoint> && toAdd, std::vector<uint32_t> && toRemove);
    void ClearGpsTrackPoints();
 diff --git a/libs/drape_frontend/frontend_renderer.cpp b/libs/drape_frontend/frontend_renderer.cpp
 --- a/libs/drape_frontend/frontend_renderer.cpp
 +++ b/libs/drape_frontend/frontend_renderer.cpp
-@@ -703,6 +703,22 @@
+@@ -703,6 +703,28 @@
      break;
    }
  
 +  case Message::Type::SetPerspectiveAngle:
 +  {
 +    ref_ptr<SetPerspectiveAngleMessage> const msg = message;
++    if (msg->IsTemporary())
++    {
++      if (m_enablePerspectiveInNavigation && m_myPositionController->IsInRouting())
++        AddUserEvent(make_unique_dp<SetPerspectiveAngleEvent>(std::max(msg->GetAngle(), 0.0), std::nullopt));
++      break;
++    }
 +    if (msg->GetAngle() < 0.0)
 +    {
 +      m_userPerspectiveAngle.reset();
@@ -53,7 +61,7 @@ diff --git a/libs/drape_frontend/frontend_renderer.cpp b/libs/drape_frontend/fro
    case Message::Type::Allow3dMode:
    {
      ref_ptr<Allow3dModeMessage> const msg = message;
-@@ -1130,7 +1146,11 @@
+@@ -1130,7 +1152,11 @@
        allowRouteRotation);
  
    if (m_enablePerspectiveInNavigation)
@@ -65,7 +73,7 @@ diff --git a/libs/drape_frontend/frontend_renderer.cpp b/libs/drape_frontend/fro
  
    m_routeRenderer->SetFollowingEnabled(true);
    CHECK(m_context != nullptr, ());
-@@ -2049,6 +2069,13 @@
+@@ -2049,6 +2075,13 @@
    m_context->SetClearColor(c);
  }
  
@@ -125,22 +133,25 @@ diff --git a/libs/drape_frontend/message.hpp b/libs/drape_frontend/message.hpp
 diff --git a/libs/drape_frontend/message_subclasses.hpp b/libs/drape_frontend/message_subclasses.hpp
 --- a/libs/drape_frontend/message_subclasses.hpp
 +++ b/libs/drape_frontend/message_subclasses.hpp
-@@ -899,6 +899,20 @@
+@@ -899,6 +899,23 @@
    Type GetType() const override { return Type::EnablePerspective; }
  };
  
 +// A negative angle returns to the angle that the engine picks from the zoom.
++// A temporary angle shows now and leaves the user's angle for the next follow.
 +class SetPerspectiveAngleMessage : public Message
 +{
 +public:
-+  explicit SetPerspectiveAngleMessage(double angle) : m_angle(angle) {}
++  SetPerspectiveAngleMessage(double angle, bool isTemporary) : m_angle(angle), m_isTemporary(isTemporary) {}
 +
 +  Type GetType() const override { return Type::SetPerspectiveAngle; }
 +
 +  double GetAngle() const { return m_angle; }
++  bool IsTemporary() const { return m_isTemporary; }
 +
 +private:
 +  double const m_angle;
++  bool const m_isTemporary;
 +};
 +
  class CacheCirclesPackMessage : public Message

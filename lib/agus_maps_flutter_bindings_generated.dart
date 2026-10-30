@@ -902,8 +902,9 @@ class AgusMapsFlutterBindings {
   late final _comaps_navigation_recenter =
       _comaps_navigation_recenterPtr.asFunction<int Function(int)>();
 
-  /// Stops route following and shows the box, made 1.5 times larger, north-up in
-  /// the visible viewport. Returns 1 on success, 0 before the map is ready.
+  /// Stops route following and shows the box, made 1.5 times larger, north-up and
+  /// flat in the visible viewport. The next route follow restores the tilt.
+  /// Returns 1 on success, 0 before the map is ready.
   int comaps_navigation_show_overview(
     double minLat,
     double minLon,

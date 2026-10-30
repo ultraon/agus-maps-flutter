@@ -1578,6 +1578,7 @@ CoMaps keeps one classificator and one set of drawing rules per map style. Since
 - The user's position keeps its place on the screen when the tilt changes. Without this anchor, a flatter view would show the far end of the tilted view, closer up.
 - `FrontendRenderer::FollowRoute` applies the stored angle again after the auto tilt, so a recenter and a new follow keep the user's tilt.
 - A negative angle drops the stored angle and returns to the auto tilt.
+- A temporary angle (`SetPerspectiveAngle(angle, true)`) shows at once and keeps the stored angle. The route overview uses a temporary angle of 0 to show the route from straight above. The next `FollowRoute` returns to the stored angle, or else to the auto tilt.
 
 **Why it's needed:**
 CoMaps has no tilt gesture and no call that sets a tilt. In navigation the auto tilt picks the angle from the zoom on every camera update. A tilt that the app sets once is lost at the next follow.

@@ -382,8 +382,9 @@ FFI_PLUGIN_EXPORT int32_t comaps_navigation_follow_route_at_zoom(int32_t zoom);
 // route when above 0, else the engine's own. Returns 1 on success, 0 when no
 // route is followed, -1 when the framework is not ready.
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_recenter(int32_t zoom);
-// Stops route following and shows the box, made 1.5 times larger, north-up in
-// the visible viewport. Returns 1 on success, 0 before the map is ready.
+// Stops route following and shows the box, made 1.5 times larger, north-up and
+// flat in the visible viewport. The next route follow restores the tilt.
+// Returns 1 on success, 0 before the map is ready.
 FFI_PLUGIN_EXPORT int32_t comaps_navigation_show_overview(
 	double minLat, double minLon, double maxLat, double maxLon);
 // Restarts the engine's 20 s timer that returns route following after a pan.

@@ -311,10 +311,9 @@ inline int32_t ShowRouteOverview(Framework * framework, double minLat, double mi
   rect.Add(mercator::FromLatLon(maxLat, maxLon));
   rect.Scale(kRouteOverviewMargin);
   engine->StopLocationFollow();
-  // The app's tilt would show the zoomed-out box at a slant. The engine keeps
-  // that tilt and applies it again when route following resumes.
-  if (g_userPerspectiveDegrees >= 0)
-    engine->EnablePerspective();
+  // The overview shows the route from straight above. The next route follow
+  // returns to the user's tilt, or else to the engine's own tilt.
+  engine->SetPerspectiveAngle(0.0, true /* isTemporary */);
   // The plain rect path clamps a tiny box to the engine's scale limits; no
   // rotation keeps the map north-up.
   engine->SetModelViewRect(rect, false /* applyRotation */, -1 /* zoom */, true /* isAnim */,

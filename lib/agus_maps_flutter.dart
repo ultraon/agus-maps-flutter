@@ -1864,8 +1864,9 @@ int? getCurrentZoom() {
 }
 
 /// Stop route following and show the box from ([minLat], [minLon]) to
-/// ([maxLat], [maxLon]), made 1.5 times larger, north-up in the visible
-/// viewport. Returns 1 on success, 0 before the map is ready.
+/// ([maxLat], [maxLon]), made 1.5 times larger, north-up and flat in the
+/// visible viewport. The next route follow, such as a recenter, restores the
+/// tilt. Returns 1 on success, 0 before the map is ready.
 int showNavigationOverview({
   required double minLat,
   required double minLon,
