@@ -46,7 +46,7 @@ diff --git a/libs/drape_frontend/frontend_renderer.cpp b/libs/drape_frontend/fro
 +    }
 +    m_userPerspectiveAngle = msg->GetAngle();
 +    if (m_enablePerspectiveInNavigation && m_myPositionController->IsInRouting())
-+      AddUserEvent(make_unique_dp<SetPerspectiveAngleEvent>(*m_userPerspectiveAngle));
++      AddUserEvent(make_unique_dp<SetPerspectiveAngleEvent>(*m_userPerspectiveAngle, PerspectiveAnchor()));
 +    break;
 +  }
 +
@@ -60,15 +60,38 @@ diff --git a/libs/drape_frontend/frontend_renderer.cpp b/libs/drape_frontend/fro
 +  {
      AddUserEvent(make_unique_dp<SetAutoPerspectiveEvent>(true /* isAutoPerspective */));
 +    if (m_userPerspectiveAngle)
-+      AddUserEvent(make_unique_dp<SetPerspectiveAngleEvent>(*m_userPerspectiveAngle));
++      AddUserEvent(make_unique_dp<SetPerspectiveAngleEvent>(*m_userPerspectiveAngle, PerspectiveAnchor()));
 +  }
  
    m_routeRenderer->SetFollowingEnabled(true);
    CHECK(m_context != nullptr, ());
+@@ -2049,6 +2069,13 @@
+   m_context->SetClearColor(c);
+ }
+ 
++std::optional<m2::PointD> FrontendRenderer::PerspectiveAnchor() const
++{
++  if (!m_myPositionController->IsModeHasPosition())
++    return std::nullopt;
++  return m_myPositionController->Position();
++}
++
+ void FrontendRenderer::DisablePerspective()
+ {
+   AddUserEvent(make_unique_dp<SetAutoPerspectiveEvent>(false /* isAutoPerspective */));
 diff --git a/libs/drape_frontend/frontend_renderer.hpp b/libs/drape_frontend/frontend_renderer.hpp
 --- a/libs/drape_frontend/frontend_renderer.hpp
 +++ b/libs/drape_frontend/frontend_renderer.hpp
-@@ -357,6 +357,8 @@
+@@ -239,6 +239,8 @@
+   void CheckIsometryMinScale(ScreenBase const & screen);
+ 
+   void DisablePerspective();
++  // The user's position keeps its place on the screen when the tilt changes.
++  std::optional<m2::PointD> PerspectiveAnchor() const;
+ 
+   // TODO all of these should call back to the platform to fire accessibility event / haptics / etc
+   void OnTap(m2::PointD const & pt, bool isLong) override;
+@@ -357,6 +359,8 @@
    FrameValues m_frameValues;
  
    bool m_enablePerspectiveInNavigation;
@@ -135,24 +158,29 @@ diff --git a/libs/drape_frontend/navigator.cpp b/libs/drape_frontend/navigator.c
  namespace df
  {
  double constexpr kDefault3dScale = 1.0;
-@@ -305,6 +307,22 @@
+@@ -305,6 +307,27 @@
      m_Screen.ResetPerspective();
  }
  
-+void Navigator::SetPerspectiveAngle(double angle)
++void Navigator::SetPerspectiveAngle(double angle, std::optional<m2::PointD> const & anchor)
 +{
-+  double const maxAngle = ScreenBase::CalculateAutoPerspectiveAngle(0.0 /* scale */);
++  std::optional<m2::PointD> anchorPixel;
++  if (anchor)
++    anchorPixel = m_Screen.PtoP3d(m_Screen.GtoP(*anchor));
++  // The same view as the auto tilt at this angle: the largest angle is the
++  // angle itself.
 +  if (angle <= 0.0)
 +  {
 +    Disable3dMode();
 +    m_Screen.SetAutoPerspective(false);
-+    return;
 +  }
-+  angle = std::min(angle, maxAngle);
-+  if (m_Screen.isPerspective() && !m_Screen.isAutoPerspective() && m_Screen.GetMaxRotationAngle() == maxAngle)
-+    m_Screen.SetRotationAngle(angle);
 +  else
-+    m_Screen.ApplyPerspective(angle, maxAngle, m_Screen.GetAngleFOV());
++  {
++    angle = std::min(angle, ScreenBase::CalculateAutoPerspectiveAngle(0.0 /* scale */));
++    m_Screen.ApplyPerspective(angle, angle, m_Screen.GetAngleFOV());
++  }
++  if (anchorPixel)
++    m_Screen.MatchGandP3d(*anchor, *anchorPixel);
 +}
 +
  m2::AnyRectD ToRotated(Navigator const & navigator, m2::RectD const & rect)
@@ -161,12 +189,22 @@ diff --git a/libs/drape_frontend/navigator.cpp b/libs/drape_frontend/navigator.c
 diff --git a/libs/drape_frontend/navigator.hpp b/libs/drape_frontend/navigator.hpp
 --- a/libs/drape_frontend/navigator.hpp
 +++ b/libs/drape_frontend/navigator.hpp
-@@ -47,6 +47,8 @@
+@@ -5,6 +5,8 @@
+ #include "geometry/rect2d.hpp"
+ #include "geometry/screenbase.hpp"
+ 
++#include <optional>
++
+ namespace df
+ {
+ extern double const kDefault3dScale;
+@@ -47,6 +49,9 @@
    void Enable3dMode();
    void SetRotationIn3dMode(double rotationAngle);
    void Disable3dMode();
 +  // Turns off the auto tilt. The largest tilt is the one the auto tilt reaches.
-+  void SetPerspectiveAngle(double angle);
++  // The map point at the anchor, a global point, keeps its place on the screen.
++  void SetPerspectiveAngle(double angle, std::optional<m2::PointD> const & anchor);
  
  private:
    // Internal screen corresponding to the state when navigation began with StartDrag or StartScale.
@@ -181,7 +219,7 @@ diff --git a/libs/drape_frontend/user_event_stream.cpp b/libs/drape_frontend/use
 +    {
 +      m_needTrackCenter = false;
 +      ref_ptr<SetPerspectiveAngleEvent> angleEvent = make_ref(e);
-+      SetPerspectiveAngle(angleEvent->GetAngle());
++      SetPerspectiveAngle(angleEvent->GetAngle(), angleEvent->GetAnchor());
 +      m_modelViewChanged = true;
 +    }
 +    break;
@@ -192,9 +230,9 @@ diff --git a/libs/drape_frontend/user_event_stream.cpp b/libs/drape_frontend/use
    m_navigator.SetAutoPerspective(isAutoPerspective);
  }
  
-+void UserEventStream::SetPerspectiveAngle(double angle)
++void UserEventStream::SetPerspectiveAngle(double angle, std::optional<m2::PointD> const & anchor)
 +{
-+  m_navigator.SetPerspectiveAngle(angle);
++  m_navigator.SetPerspectiveAngle(angle, anchor);
 +}
 +
  void UserEventStream::ResetAnimations(Animation::Type animType, bool rewind, bool finishAll)
@@ -203,7 +241,15 @@ diff --git a/libs/drape_frontend/user_event_stream.cpp b/libs/drape_frontend/use
 diff --git a/libs/drape_frontend/user_event_stream.hpp b/libs/drape_frontend/user_event_stream.hpp
 --- a/libs/drape_frontend/user_event_stream.hpp
 +++ b/libs/drape_frontend/user_event_stream.hpp
-@@ -46,7 +46,8 @@
+@@ -18,6 +18,7 @@
+ #include <list>
+ #include <memory>
+ #include <mutex>
++#include <optional>
+ #include <string>
+ 
+ namespace df
+@@ -46,7 +47,8 @@
      VisibleViewport,
      Move,
      Scroll,
@@ -213,31 +259,35 @@ diff --git a/libs/drape_frontend/user_event_stream.hpp b/libs/drape_frontend/use
    };
  
    virtual ~UserEvent() = default;
-@@ -322,6 +323,19 @@
+@@ -322,6 +324,23 @@
    bool m_isAutoPerspective;
  };
  
++// The map point at the anchor, a global point, stays at the same place on
++// the screen.
 +class SetPerspectiveAngleEvent : public UserEvent
 +{
 +public:
-+  explicit SetPerspectiveAngleEvent(double angle) : m_angle(angle) {}
++  SetPerspectiveAngleEvent(double angle, std::optional<m2::PointD> const & anchor) : m_angle(angle), m_anchor(anchor) {}
 +
 +  EventType GetType() const override { return UserEvent::EventType::PerspectiveAngle; }
 +
 +  double GetAngle() const { return m_angle; }
++  std::optional<m2::PointD> const & GetAnchor() const { return m_anchor; }
 +
 +private:
 +  double m_angle;
++  std::optional<m2::PointD> m_anchor;
 +};
 +
  class RotateEvent : public UserEvent
  {
  public:
-@@ -488,6 +502,7 @@
+@@ -488,6 +507,7 @@
                            Animation::TAction const & onFinishAction = nullptr,
                            TAnimationCreator const & parallelAnimCreator = nullptr);
    void SetAutoPerspective(bool isAutoPerspective);
-+  void SetPerspectiveAngle(double angle);
++  void SetPerspectiveAngle(double angle, std::optional<m2::PointD> const & anchor);
  
    m2::AnyRectD GetCurrentRect() const;
  

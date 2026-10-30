@@ -1574,7 +1574,8 @@ CoMaps keeps one classificator and one set of drawing rules per map style. Since
 **What it does:**
 - `DrapeEngine::SetPerspectiveAngle(angle)` posts a new `SetPerspectiveAngleMessage` to the render thread. The angle is in radians.
 - `FrontendRenderer` stores the angle and adds a `SetPerspectiveAngleEvent` while routing is active and perspective in navigation is allowed.
-- `Navigator::SetPerspectiveAngle` turns off the auto tilt and applies the angle. The largest angle is the one the auto tilt reaches at a street zoom (`CalculateAutoPerspectiveAngle(0)`, about 54 degrees). An angle of 0 shows the map flat.
+- `Navigator::SetPerspectiveAngle` turns off the auto tilt and applies the angle the same way the auto tilt does: the largest angle of the screen is the angle itself. The highest angle is the one the auto tilt reaches at a street zoom (`CalculateAutoPerspectiveAngle(0)`, about 54 degrees). An angle of 0 shows the map flat.
+- The user's position keeps its place on the screen when the tilt changes. Without this anchor, a flatter view would show the far end of the tilted view, closer up.
 - `FrontendRenderer::FollowRoute` applies the stored angle again after the auto tilt, so a recenter and a new follow keep the user's tilt.
 - A negative angle drops the stored angle and returns to the auto tilt.
 
