@@ -1,3 +1,4 @@
+diff --git a/libs/drape_frontend/my_position_controller.cpp b/libs/drape_frontend/my_position_controller.cpp
 --- a/libs/drape_frontend/my_position_controller.cpp
 +++ b/libs/drape_frontend/my_position_controller.cpp
 @@ -38,6 +38,9 @@
@@ -10,15 +11,16 @@
  
  int constexpr kZoomThreshold = 10;
  int constexpr kMaxScaleZoomLevel = 16;
-@@ -207,6 +210,7 @@
+@@ -207,6 +210,8 @@
    , m_isDirtyViewport(false)
    , m_isDirtyAutoZoom(false)
    , m_isPendingAnimation(false)
 +  , m_isAnimCreatorHandedOver(false)
++  , m_isPendingAnimationTimed(false)
    , m_isPositionAssigned(false)
    , m_isArrowDirectionAssigned(false)
    , m_isRouteDirectionAssigned(false)
-@@ -709,6 +713,7 @@
+@@ -709,6 +714,7 @@
    {
      CheckBlockAutoZoom();
      CheckUpdateLocation();
@@ -26,7 +28,7 @@
  
      if ((m_isDirtyViewport || m_isDirtyAutoZoom) && !m_needBlockAnimation)
      {
-@@ -851,6 +856,7 @@
+@@ -851,6 +857,7 @@
  {
    if (m_listener)
      m_listener->ChangeModelView(center, zoomLevel, m_animCreator);
@@ -34,7 +36,7 @@
    m_animCreator = nullptr;
  }
  
-@@ -858,6 +864,7 @@
+@@ -858,6 +865,7 @@
  {
    if (m_listener)
      m_listener->ChangeModelView(azimuth, m_animCreator);
@@ -42,7 +44,7 @@
    m_animCreator = nullptr;
  }
  
-@@ -865,6 +872,7 @@
+@@ -865,6 +873,7 @@
  {
    if (m_listener)
      m_listener->ChangeModelView(rect, m_animCreator);
@@ -50,7 +52,7 @@
    m_animCreator = nullptr;
  }
  
-@@ -873,6 +881,7 @@
+@@ -873,6 +882,7 @@
  {
    if (m_listener)
      m_listener->ChangeModelView(userPos, azimuth, pxZero, zoomLevel, onFinishAction, m_animCreator);
@@ -58,7 +60,7 @@
    m_animCreator = nullptr;
  }
  
-@@ -881,9 +890,35 @@
+@@ -881,9 +891,42 @@
  {
    if (m_listener)
      m_listener->ChangeModelView(autoScale, userPos, azimuth, pxZero, m_animCreator);
@@ -73,17 +75,24 @@
 +// which equals m_direction, so OnCompassUpdate never turns the map again.
 +void MyPositionController::DropPendingAnimationWithoutArrow()
 +{
++  // A later handover, for example after a GPS fix, keeps the first time, so
++  // repeated lost animations cannot postpone the drop.
 +  if (m_isAnimCreatorHandedOver)
 +  {
 +    m_isAnimCreatorHandedOver = false;
-+    m_pendingAnimationStart = std::chrono::steady_clock::now();
++    if (!m_isPendingAnimationTimed)
++    {
++      m_isPendingAnimationTimed = true;
++      m_pendingAnimationStart = std::chrono::steady_clock::now();
++    }
 +  }
-+  if (!m_isPendingAnimation || m_animCreator != nullptr)
++  if (!m_isPendingAnimation || m_animCreator != nullptr || !m_isPendingAnimationTimed)
 +    return;
 +  if (std::chrono::steady_clock::now() - m_pendingAnimationStart < kMaxPendingArrowAnimation)
 +    return;
 +
 +  m_isPendingAnimation = false;
++  m_isPendingAnimationTimed = false;
 +  if (m_mode == location::FollowAndRotate && !m_isInRouting)
 +  {
 +    m_direction = m_arrowDirection;
@@ -94,6 +103,16 @@
  void MyPositionController::UpdateViewport(int zoomLevel)
  {
    if (IsWaitingForLocation())
+@@ -974,6 +1017,8 @@
+       };
+       m_oldPosition = oldPos;
+       m_oldArrowDirection = oldAzimut;
++      if (!m_isPendingAnimation)
++        m_isPendingAnimationTimed = false;
+       m_isPendingAnimation = true;
+     }
+     else
+diff --git a/libs/drape_frontend/my_position_controller.hpp b/libs/drape_frontend/my_position_controller.hpp
 --- a/libs/drape_frontend/my_position_controller.hpp
 +++ b/libs/drape_frontend/my_position_controller.hpp
 @@ -1,5 +1,7 @@
@@ -112,13 +131,16 @@
    bool UpdateViewportWithAutoZoom();
    m2::PointD GetRotationPixelCenter() const;
    m2::PointD GetRoutingRotationPixelCenter() const;
-@@ -252,6 +255,10 @@
+@@ -252,6 +255,13 @@
    bool m_isDirtyViewport;
    bool m_isDirtyAutoZoom;
    bool m_isPendingAnimation;
 +  // True from the frame that passes m_animCreator to a camera change until
 +  // the next frame notes the time.
 +  bool m_isAnimCreatorHandedOver;
++  // True once the first handover of the current pending arrow animation
++  // noted its time in m_pendingAnimationStart.
++  bool m_isPendingAnimationTimed;
 +  std::chrono::steady_clock::time_point m_pendingAnimationStart;
  
    TAnimationCreator m_animCreator;
