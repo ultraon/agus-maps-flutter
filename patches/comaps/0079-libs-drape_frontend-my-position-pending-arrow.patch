@@ -1,0 +1,125 @@
+--- a/libs/drape_frontend/my_position_controller.cpp
++++ b/libs/drape_frontend/my_position_controller.cpp
+@@ -38,6 +38,9 @@
+ double constexpr kMaxNotFollowRoutingTimeSec = 20.0;
+ double constexpr kMaxUpdateLocationInvervalSec = 30.0;
+ double constexpr kMaxBlockAutoZoomTimeSec = 10.0;
++// An arrow animation that has not started this long after its camera change
++// was handed over will not start any more.
++auto constexpr kMaxPendingArrowAnimation = std::chrono::milliseconds(1000);
+ 
+ int constexpr kZoomThreshold = 10;
+ int constexpr kMaxScaleZoomLevel = 16;
+@@ -207,6 +210,7 @@
+   , m_isDirtyViewport(false)
+   , m_isDirtyAutoZoom(false)
+   , m_isPendingAnimation(false)
++  , m_isAnimCreatorHandedOver(false)
+   , m_isPositionAssigned(false)
+   , m_isArrowDirectionAssigned(false)
+   , m_isRouteDirectionAssigned(false)
+@@ -709,6 +713,7 @@
+   {
+     CheckBlockAutoZoom();
+     CheckUpdateLocation();
++    DropPendingAnimationWithoutArrow();
+ 
+     if ((m_isDirtyViewport || m_isDirtyAutoZoom) && !m_needBlockAnimation)
+     {
+@@ -851,6 +856,7 @@
+ {
+   if (m_listener)
+     m_listener->ChangeModelView(center, zoomLevel, m_animCreator);
++  m_isAnimCreatorHandedOver = m_isAnimCreatorHandedOver || m_animCreator != nullptr;
+   m_animCreator = nullptr;
+ }
+ 
+@@ -858,6 +864,7 @@
+ {
+   if (m_listener)
+     m_listener->ChangeModelView(azimuth, m_animCreator);
++  m_isAnimCreatorHandedOver = m_isAnimCreatorHandedOver || m_animCreator != nullptr;
+   m_animCreator = nullptr;
+ }
+ 
+@@ -865,6 +872,7 @@
+ {
+   if (m_listener)
+     m_listener->ChangeModelView(rect, m_animCreator);
++  m_isAnimCreatorHandedOver = m_isAnimCreatorHandedOver || m_animCreator != nullptr;
+   m_animCreator = nullptr;
+ }
+ 
+@@ -873,6 +881,7 @@
+ {
+   if (m_listener)
+     m_listener->ChangeModelView(userPos, azimuth, pxZero, zoomLevel, onFinishAction, m_animCreator);
++  m_isAnimCreatorHandedOver = m_isAnimCreatorHandedOver || m_animCreator != nullptr;
+   m_animCreator = nullptr;
+ }
+ 
+@@ -881,9 +890,35 @@
+ {
+   if (m_listener)
+     m_listener->ChangeModelView(autoScale, userPos, azimuth, pxZero, m_animCreator);
++  m_isAnimCreatorHandedOver = m_isAnimCreatorHandedOver || m_animCreator != nullptr;
+   m_animCreator = nullptr;
+ }
+ 
++// The camera change that carries the arrow animation runs as a user event in
++// a later frame. Another camera change, for example an app rotation, can
++// interrupt it or hold it back, so the arrow animation never starts. The
++// arrow then stays pending: GetDrawableAzimut keeps returning the old angle,
++// which equals m_direction, so OnCompassUpdate never turns the map again.
++void MyPositionController::DropPendingAnimationWithoutArrow()
++{
++  if (m_isAnimCreatorHandedOver)
++  {
++    m_isAnimCreatorHandedOver = false;
++    m_pendingAnimationStart = std::chrono::steady_clock::now();
++  }
++  if (!m_isPendingAnimation || m_animCreator != nullptr)
++    return;
++  if (std::chrono::steady_clock::now() - m_pendingAnimationStart < kMaxPendingArrowAnimation)
++    return;
++
++  m_isPendingAnimation = false;
++  if (m_mode == location::FollowAndRotate && !m_isInRouting)
++  {
++    m_direction = m_arrowDirection;
++    m_isDirtyViewport = true;
++  }
++}
++
+ void MyPositionController::UpdateViewport(int zoomLevel)
+ {
+   if (IsWaitingForLocation())
+--- a/libs/drape_frontend/my_position_controller.hpp
++++ b/libs/drape_frontend/my_position_controller.hpp
+@@ -1,5 +1,7 @@
+ #pragma once
+ 
++#include <chrono>
++
+ #include "drape_frontend/animation/animation.hpp"
+ #include "drape_frontend/arrow3d.hpp"
+ #include "drape_frontend/drape_hints.hpp"
+@@ -186,6 +188,7 @@
+   void ChangeModelView(double autoScale, m2::PointD const & userPos, double azimuth, m2::PointD const & pxZero);
+ 
+   void UpdateViewport(int zoomLevel);
++  void DropPendingAnimationWithoutArrow();
+   bool UpdateViewportWithAutoZoom();
+   m2::PointD GetRotationPixelCenter() const;
+   m2::PointD GetRoutingRotationPixelCenter() const;
+@@ -252,6 +255,10 @@
+   bool m_isDirtyViewport;
+   bool m_isDirtyAutoZoom;
+   bool m_isPendingAnimation;
++  // True from the frame that passes m_animCreator to a camera change until
++  // the next frame notes the time.
++  bool m_isAnimCreatorHandedOver;
++  std::chrono::steady_clock::time_point m_pendingAnimationStart;
+ 
+   TAnimationCreator m_animCreator;
+ 

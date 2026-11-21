@@ -1585,3 +1585,21 @@ CoMaps has no tilt gesture and no call that sets a tilt. In navigation the auto 
 
 **Without this patch:**
 - The app cannot offer a two-finger tilt gesture in navigation.
+
+### 0079-libs-drape_frontend-my-position-pending-arrow.patch
+
+**Files Modified:** `libs/drape_frontend/my_position_controller.cpp`, `my_position_controller.hpp`
+
+**Category:** Map turning / Compass
+
+**Purpose:** Keeps the map turning with the compass in the follow-and-rotate mode after another camera change interrupts or holds back the arrow animation.
+
+**What it does:**
+- When a compass update turns the map, `CreateAnim` marks the arrow animation as pending and stores the code that creates it (`m_animCreator`). The next frame passes that code to a camera change, which runs as a user event in a later frame.
+- The controller notes the time of that handover. If the arrow animation has still not started 1 second later, the controller drops the pending mark. In follow-and-rotate (outside a route) it also takes the current arrow angle as the map direction and updates the map.
+
+**Why it's needed:**
+While the arrow animation is pending, `GetDrawableAzimut` returns the old arrow angle, which equals `m_direction`. `OnCompassUpdate` then treats every new heading as no change and never turns the map again. Only a mode change out of the follow modes ended this state. A device check on 2026-11-21 (iPhone 17 Pro) showed the mark stuck after the app turned the map itself (`comaps_set_bearing`) right after a compass update, while the engine still reported follow-and-rotate.
+
+**Without this patch:**
+- During a POI scan the map can stop turning with the phone while the position arrow still turns.
